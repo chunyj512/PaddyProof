@@ -51,6 +51,50 @@ def s1_state_on(dates, states, target) -> str | None:
     return prev
 
 
+def merge_timeline(s1, ni) -> list[dict]:
+    """두 센서의 관측을 날짜 하나의 표로 합친다.
+
+    두 위성은 서로 다른 날 지나가므로 같은 날 값이 나란히 놓이는 일은 드물다.
+    그래서 교집합이 아니라 **합집합**을 쓰고, 관측이 없는 칸은 비워 둔다.
+    빈칸을 보간해 채우면 있지도 않은 관측을 있는 것처럼 보이게 된다.
+
+    S1 판정 상태는 모든 행에 채운다. 관측 사이 구간은 직전 관측 상태가 유지된
+    것으로 보기 때문이며, NISAR 만 관측한 날에도 그때 논이 어떤 상태로
+    판정되어 있었는지가 교차 검증에서 읽어야 할 값이다.
+    """
+    s1_dates = [d.date() for d in s1["date"]]
+    s1_states = list(s1["state"])
+
+    s1_by_date = {
+        d.date(): {"vh_db": float(r["vh_db"]),
+                   "vh_smooth": float(r["vh_db_smooth"]),
+                   "state": r["state"]}
+        for d, (_, r) in zip(s1["date"], s1.iterrows())
+    }
+    ni_by_date = {
+        d.date(): {"hh_db": float(r["hh_db"]), "hv_db": float(r["hv_db"]),
+                   "hh_hv": float(r["hh_hv"])}
+        for d, (_, r) in zip(ni["date"], ni.iterrows())
+    } if ni is not None and len(ni) else {}
+
+    out = []
+    for d in sorted(set(s1_by_date) | set(ni_by_date)):
+        s = s1_by_date.get(d)
+        n = ni_by_date.get(d)
+        out.append({
+            "date": d.isoformat(),
+            "vh_db": s["vh_db"] if s else None,
+            "vh_smooth": s["vh_smooth"] if s else None,
+            "hh_db": n["hh_db"] if n else None,
+            "hv_db": n["hv_db"] if n else None,
+            "hh_hv": n["hh_hv"] if n else None,
+            # 관측이 없는 날은 직전 관측 상태가 유지된 것으로 본다
+            "s1_state": s["state"] if s else s1_state_on(s1_dates, s1_states, d),
+            "sensors": ([("S1")] if s else []) + (["NISAR"] if n else []),
+        })
+    return out
+
+
 def cross_check(lat: float, lon: float, s1_csv: Path,
                 buffer_m: float = 40.0, verbose: bool = True) -> dict:
     """S1 결과와 NISAR 시계열을 대조해 교차 증거를 만든다."""
@@ -96,6 +140,7 @@ def cross_check(lat: float, lon: float, s1_csv: Path,
         "n_drained": len(drained),
         "n_ponded": len(ponded),
         "rows": ni.to_dict("records"),
+        "timeline": merge_timeline(s1, ni),
     }
 
     if len(drained) < MIN_OBS_PER_GROUP or len(ponded) < MIN_OBS_PER_GROUP:
@@ -170,13 +215,22 @@ def to_markdown(res: dict) -> str:
             "",
         ]
 
-    L += ["### NISAR 관측값", "",
-          "| 날짜 | HH (dB) | HV (dB) | HH-HV | 같은 날 S1 판정 |",
-          "| --- | --- | --- | --- | --- |"]
-    for r in res["rows"]:
-        d = str(r["date"])[:10]
-        L.append(f"| {d} | {r['hh_db']:+.2f} | {r['hv_db']:+.2f} | "
-                 f"{r['hh_hv']:+.2f} | {r['s1_state'] or '-'} |")
+    tl = res.get("timeline") or []
+    if tl:
+        n_s1 = sum(1 for r in tl if r["vh_smooth"] is not None)
+        n_ni = sum(1 for r in tl if r["hh_db"] is not None)
+        L += [f"### 관측 기록 (Sentinel-1 {n_s1}건 · NISAR {n_ni}건)", "",
+              "두 위성은 서로 다른 날 지나가므로 한쪽만 값이 있는 행이 대부분입니다.",
+              "빈 칸은 그날 그 위성이 관측하지 않았다는 뜻입니다. 단위는 모두 dB 입니다.",
+              "",
+              "| 날짜 | 관측 위성 | S1 VH | NISAR HH | HV | HH-HV | 상태 |",
+              "| --- | --- | --- | --- | --- | --- | --- |"]
+        def f(v):
+            return f"{v:+.2f}" if v is not None else "·"
+        for r in tl:
+            L.append(f"| {r['date']} | {'+'.join(r['sensors'])} | "
+                     f"{f(r['vh_smooth'])} | {f(r['hh_db'])} | {f(r['hv_db'])} | "
+                     f"{f(r['hh_hv'])} | {r['s1_state'] or '-'} |")
     L += [
         "",
         "### 원리와 한계",

@@ -250,7 +250,7 @@ def _attach_cross_check(job: Job, idx: int, plot: Plot, p: dict) -> None:
         plot.nisar_detail = {
             k: res[k] for k in
             ("reason", "hh_drained", "hh_ponded", "hh_diff", "n_ponded",
-             "n_drained", "n_nisar")
+             "n_drained", "n_nisar", "timeline")
             if k in res
         }
         plot.nisar_detail["rows"] = rows

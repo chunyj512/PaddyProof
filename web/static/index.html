@@ -513,6 +513,45 @@ const NISAR_LABEL = {
   unclear:         {t:'판단 보류',        cls:'hint'},
   no_data:         {t:'교차 검증 불가',   cls:'hint'},
 };
+// 두 위성 관측을 날짜 한 줄로 합쳐 보여준다. 두 위성이 같은 날 지나가는 일은
+// 드물어서 대부분의 행은 한쪽만 값이 있다. 빈 칸은 채우지 않는다 — 보간하면
+// 있지도 않은 관측이 있는 것처럼 보인다.
+function timelineTable(tl) {
+  if (!tl || !tl.length) return '';
+  const n = v => v == null ? '<span class="muted">·</span>'
+                           : (v > 0 ? '+' : '') + v.toFixed(2);
+  const nS1 = tl.filter(r => r.vh_smooth != null).length;
+  const nNI = tl.filter(r => r.hh_db != null).length;
+  return `
+    <details style="margin-top:12px" open><summary class="muted"
+      style="cursor:pointer;font-size:12.5px">관측 기록 ${tl.length}일치
+      — Sentinel-1 ${nS1}건 · NISAR ${nNI}건</summary>
+      <div style="overflow-x:auto"><table style="margin-top:8px">
+        <tr>
+          <th>날짜</th><th>관측 위성</th>
+          <th class="num">S1 VH</th>
+          <th class="num">NISAR HH</th><th class="num">HV</th><th class="num">HH−HV</th>
+          <th>상태</th>
+        </tr>
+        ${tl.map(r => `<tr>
+          <td>${esc(r.date)}</td>
+          <td>${r.sensors.map(s => `<span class="pill" style="border-color:${
+              s === 'S1' ? '#2a78d6' : '#1baf7a'};color:${
+              s === 'S1' ? '#2a78d6' : '#1baf7a'}">${s}</span>`).join(' ')}</td>
+          <td class="num">${n(r.vh_smooth)}</td>
+          <td class="num">${n(r.hh_db)}</td>
+          <td class="num">${n(r.hv_db)}</td>
+          <td class="num">${n(r.hh_hv)}</td>
+          <td><span class="verdict ${r.s1_state === '낙수' ? 'v-no' : 'v-ok'}"
+            style="font-size:11.5px;padding:1px 9px">${esc(r.s1_state || '-')}</span></td>
+        </tr>`).join('')}
+      </table></div>
+      <p class="hint">두 위성은 서로 다른 날 지나가므로 한쪽만 값이 있는 행이
+        대부분입니다. 값이 없는 칸(·)은 그날 그 위성이 관측하지 않았다는 뜻이고,
+        상태는 직전 관측이 유지된 것으로 봅니다. 단위는 모두 dB 입니다.</p>
+    </details>`;
+}
+
 function showNisar(verdict, d) {
   const box = $('#nisar');
   if (!verdict) { box.innerHTML = ''; return; }
@@ -537,18 +576,7 @@ function showNisar(verdict, d) {
         <tr style="font-weight:650"><td>차이</td>
           <td class="num">${d.hh_diff > 0 ? '+' : ''}${d.hh_diff.toFixed(2)} dB</td><td></td></tr>
       </table>` : ''}
-    ${(d.rows || []).length ? `
-      <details style="margin-top:10px"><summary class="muted"
-        style="cursor:pointer;font-size:12.5px">NISAR 관측값 ${d.rows.length}건 보기</summary>
-        <table style="margin-top:8px">
-          <tr><th>날짜</th><th class="num">HH</th><th class="num">HV</th>
-            <th class="num">HH-HV</th><th>S1 판정</th></tr>
-          ${d.rows.map(r => `<tr><td>${esc(r.date)}</td>
-            <td class="num">${r.hh_db.toFixed(2)}</td>
-            <td class="num">${r.hv_db.toFixed(2)}</td>
-            <td class="num">${r.hh_hv.toFixed(2)}</td>
-            <td>${esc(r.s1_state || '-')}</td></tr>`).join('')}
-        </table></details>` : ''}
+    ${timelineTable(d.timeline)}
     <p class="hint">L-band(24 cm)는 벼 캐노피를 투과해 수면-줄기 이중반사를 봅니다.
       판정 주체는 Sentinel-1 이며, NISAR 는 그 판정이 캐노피 성장에 속은 것은 아닌지만
       점검합니다. NISAR 공개분은 2026-06-17 이후입니다.</p>`;
