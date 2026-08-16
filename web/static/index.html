@@ -106,6 +106,7 @@
 </div>
 
 <div class="wrap hidden" id="app">
+  <div id="credWarn"></div>
   <div class="tabs">
     <button class="on" data-tab="single">단건 분석</button>
     <button data-tab="batch">일괄 분석</button>
@@ -266,7 +267,19 @@ async function boot() {
     $('#authState').innerHTML = r.required
       ? '<span class="pill">로그인됨</span>' : '<span class="pill">로컬 전용</span>';
     initMap();
+    checkCredentials();
   }
+}
+
+// 위성 자격증명이 죽어 있으면 분석을 눌러 실패를 겪기 전에 미리 알린다.
+async function checkCredentials() {
+  let d;
+  try { d = await fetch('/api/credentials').then(r => r.json()); }
+  catch { return; }
+  if (d.ok) return;
+  $('#credWarn').innerHTML = `<div class="err" style="margin:0 0 16px">
+    <b>위성 자료에 접속할 수 없습니다 — 지금 분석하면 실패합니다.</b>
+    ${esc(d.message)}</div>`;
 }
 $('#loginBtn').onclick = async () => {
   const fd = new FormData(); fd.append('password', $('#pw').value);
@@ -423,11 +436,20 @@ async function showSingle(p) {
       <div>데이터 경로<b style="font-size:15px">${esc(p.source || 'openEO')}</b></div>
       <div>좌표<b style="font-size:15px">${(+$('#lat').value).toFixed(4)}, ${(+$('#lon').value).toFixed(4)}</b></div>
     </div>
-    ${p.png ? `<img class="plot" src="/api/files/${p.png}">` : ''}
+    ${p.combined_png ? `
+      <img class="plot" src="/api/files/${p.combined_png}?t=${Date.now()}">
+      <p class="hint">Sentinel-1 C-band 와 NISAR L-band 를 같은 축(dB)에 겹쳐 그렸습니다.
+        두 센서의 물리가 반대라 — C-band 는 담수면에서 낮아지고 L-band 는 담수면에서
+        높아집니다 — 같은 방향으로 움직이면 어긋남, 반대로 움직이면 일치입니다.</p>
+      <details style="margin-top:8px"><summary class="muted"
+        style="cursor:pointer;font-size:12.5px">Sentinel-1 단독 그래프 보기</summary>
+        ${p.png ? `<img class="plot" src="/api/files/${p.png}">` : ''}</details>`
+      : (p.png ? `<img class="plot" src="/api/files/${p.png}">` : '')}
     <div id="sens"></div>
     <div id="nisar"></div>
     <div class="files" style="margin-top:14px">
-      ${p.png ? `<a href="/api/files/${p.png}" download>그래프 PNG</a>` : ''}
+      ${p.combined_png ? `<a href="/api/files/${p.combined_png}" download>교차검증 그래프 PNG</a>` : ''}
+      ${p.png ? `<a href="/api/files/${p.png}" download>S1 그래프 PNG</a>` : ''}
       ${p.md ? `<a href="/api/files/${p.md}" download>리포트 MD</a>
                 <a href="#" id="viewMd">리포트 보기</a>` : ''}
       ${p.csv ? `<a href="/api/files/${p.csv}" download>원자료 CSV</a>` : ''}
@@ -466,7 +488,8 @@ async function showSingle(p) {
     } catch { /* 민감도는 부가 정보이므로 실패해도 결과는 그대로 보여준다 */ }
   }
 
-  if (p.csv) loadNisar(p.csv);
+  // 교차 증거는 분석 작업에서 이미 계산했다. 다시 조회하지 않는다.
+  showNisar(p.nisar, p.nisar_detail);
 }
 
 // ---------- NISAR L-band 교차 증거 ----------
@@ -490,41 +513,20 @@ const NISAR_LABEL = {
   unclear:         {t:'판단 보류',        cls:'hint'},
   no_data:         {t:'교차 검증 불가',   cls:'hint'},
 };
-async function loadNisar(csvName) {
+function showNisar(verdict, d) {
   const box = $('#nisar');
-  box.innerHTML = `<h2 style="margin-top:18px">NISAR L-band 교차 증거</h2>
-    <div class="hint">조회 중… (위성 자료를 원격에서 읽습니다, 최대 1분)</div>`;
-  const q = new URLSearchParams({csv:csvName, lat:$('#lat').value,
-                                 lon:$('#lon').value, buffer:$('#buffer').value});
-  // 응답이 안 오면 무한 대기하지 않고 명확히 실패를 알린다.
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 240000);
-  let res;
-  try {
-    res = await fetch('/api/nisar?' + q, {signal: ctrl.signal});
-  } catch (e) {
-    clearTimeout(timer);
+  if (!verdict) { box.innerHTML = ''; return; }
+  if (verdict === 'error') {
     box.innerHTML = `<h2 style="margin-top:18px">NISAR L-band 교차 증거</h2>
-      <div class="err">${e.name === 'AbortError'
-        ? '조회 시간이 초과되었습니다 (4분). 위성 자료 서버가 느리거나 다른 작업이 대역폭을 쓰고 있을 수 있습니다. 잠시 후 다시 시도하세요.'
-        : '조회에 실패했습니다: ' + esc(e.message)}</div>`;
+      <div class="err">${esc((d && d.reason) || '교차 검증에 실패했습니다.')}</div>`;
     return;
   }
-  clearTimeout(timer);
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try { msg = (await res.json()).detail || msg; } catch {}
-    box.innerHTML = `<h2 style="margin-top:18px">NISAR L-band 교차 증거</h2>
-      <div class="err">${esc(msg)}</div>`;
-    return;
-  }
-  const d = await res.json();
-  const meta = NISAR_LABEL[d.verdict] || NISAR_LABEL.unclear;
+  d = d || {};
+  const meta = NISAR_LABEL[verdict] || NISAR_LABEL.unclear;
 
   box.innerHTML = `
     <h2 style="margin-top:18px">NISAR L-band 교차 증거</h2>
-    <div class="${meta.cls}"><b>${meta.t}</b> — ${esc(d.reason)}</div>
-    ${d.png ? `<img class="plot" src="/api/files/${d.png}?t=${Date.now()}">` : ''}
+    <div class="${meta.cls}"><b>${meta.t}</b> — ${esc(d.reason || '')}</div>
     ${d.hh_diff !== undefined ? `
       <table style="margin-top:10px">
         <tr><th>구분</th><th class="num">NISAR HH 평균</th><th class="num">관측</th></tr>
@@ -652,9 +654,10 @@ function drawBatch() {
 window.peek = i => {
   const r = bRows[i];
   $('#dlgTitle').textContent = r.name;
-  $('#dlgBody').innerHTML = `<img class="plot" src="/api/files/${r.png}">
+  $('#dlgBody').innerHTML = `<img class="plot" src="/api/files/${r.combined_png || r.png}">
     <div class="files" style="margin-top:12px">
-      <a href="/api/files/${r.png}" download>PNG</a>
+      ${r.combined_png ? `<a href="/api/files/${r.combined_png}" download>교차검증 PNG</a>` : ''}
+      <a href="/api/files/${r.png}" download>S1 PNG</a>
       ${r.md ? `<a href="/api/files/${r.md}" download>리포트</a>` : ''}
       ${r.csv ? `<a href="/api/files/${r.csv}" download>CSV</a>` : ''}</div>`;
   $('#dlg').showModal();

@@ -120,6 +120,9 @@ class Plot:
     error: str | None = None
     source: str | None = None     # openEO | Sentinel Hub
     nisar: str | None = None      # NISAR 교차 증거 verdict
+    nisar_reason: str | None = None
+    nisar_detail: dict | None = None  # 교차 증거 표에 쓸 값들 (재조회 없이 화면에 전달)
+    combined_png: str | None = None   # S1+NISAR 를 겹쳐 그린 통합 그래프
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items()}
@@ -171,6 +174,9 @@ def run_one(job: Job, idx: int, plot: Plot) -> None:
         "--smooth", str(p["smooth"]),
         "--outdir", str(OUTDIR),
         "--csv",
+        # 웹에서는 아무도 로그인 코드를 입력해 줄 수 없다. 인증이 만료되었으면
+        # 대화형 흐름으로 넘어가 5분을 기다리지 말고 바로 실패해야 한다.
+        "--non-interactive",
     ]
     if p.get("source") and p["source"] != "auto":
         cmd += ["--source", p["source"]]
@@ -213,23 +219,58 @@ def run_one(job: Job, idx: int, plot: Plot) -> None:
     proc.wait()
     if proc.returncode == 0 and plot.verdict:
         plot.status = "완료"
-        # 선택 시 NISAR 교차 증거를 붙인다 (첫 조회는 필지당 수 분).
         if p.get("nisar") and plot.csv:
-            job.emit("log", index=idx, line="      NISAR 교차 증거 조회 중...")
-            try:
-                sys.path.insert(0, str(ROOT))
-                from nisar_evidence import cross_check
-                res = cross_check(plot.lat, plot.lon, OUTDIR / plot.csv,
-                                  buffer_m=float(p["buffer"]), verbose=False)
-                plot.nisar = res["verdict"]
-            except Exception as exc:
-                plot.nisar = "error"
-                job.emit("log", index=idx, line=f"      NISAR 실패: {str(exc)[:60]}")
+            _attach_cross_check(job, idx, plot, p)
     else:
         plot.status = "실패"
         err = next((l for l in reversed(tail) if "[오류]" in l), None)
         plot.error = (err or "\n".join(tail[-3:]) or "알 수 없는 오류").replace("[오류] ", "")
     job.emit("plot", index=idx, plot=plot.to_dict())
+
+
+def _attach_cross_check(job: Job, idx: int, plot: Plot, p: dict) -> None:
+    """NISAR 교차 증거를 붙이고 두 센서를 겹쳐 그린 통합 그래프를 만든다.
+
+    통합 그래프는 NISAR 를 못 얻어도 그린다. 그래야 결과 화면에 늘 같은 그래프가
+    놓이고, '교차 검증을 아직 안 한 것' 과 '할 수 없는 것' 이 구분된다.
+    """
+    sys.path.insert(0, str(ROOT))
+    job.emit("log", index=idx, line="      NISAR 교차 증거 조회 중...")
+
+    rows = None
+    try:
+        from nisar_evidence import cross_check
+        res = cross_check(plot.lat, plot.lon, OUTDIR / plot.csv,
+                          buffer_m=float(p["buffer"]), verbose=False)
+        plot.nisar = res["verdict"]
+        plot.nisar_reason = res.get("reason")
+        rows = res.get("rows") or []
+        for r in rows:
+            r["date"] = str(r["date"])[:10]
+        plot.nisar_detail = {
+            k: res[k] for k in
+            ("reason", "hh_drained", "hh_ponded", "hh_diff", "n_ponded",
+             "n_drained", "n_nisar")
+            if k in res
+        }
+        plot.nisar_detail["rows"] = rows
+    except Exception as exc:
+        plot.nisar = "error"
+        plot.nisar_reason = str(exc)[:200]
+        job.emit("log", index=idx, line=f"      NISAR 실패: {str(exc)[:60]}")
+
+    try:
+        from nisar_compare import render_combined_png
+        name = f"combined_{Path(plot.csv).stem}.png"
+        out = render_combined_png(
+            plot.lat, plot.lon, OUTDIR / plot.csv, OUTDIR / name,
+            threshold=float(p["threshold"]), min_days=int(p["min_days"]),
+            nisar_rows=rows, buffer_m=float(p["buffer"]), verbose=False,
+        )
+        plot.combined_png = out["png"]
+        job.emit("log", index=idx, line=f"      저장: {out['png']}")
+    except Exception as exc:
+        job.emit("log", index=idx, line=f"      통합 그래프 실패: {str(exc)[:80]}")
 
 
 def run_job(job: Job) -> None:
@@ -286,6 +327,38 @@ def require_auth(session: str | None) -> None:
 @app.get("/api/auth")
 def auth_status(session: str | None = Cookie(default=None)):
     return {"required": bool(PASSWORD), "ok": not PASSWORD or session in _sessions}
+
+
+# 위성 자격증명 점검 결과를 잠깐 캐시한다. 매번 확인하면 화면을 열 때마다
+# 인증 서버로 왕복이 생긴다.
+_cred_cache: dict = {"at": 0.0, "value": None}
+CRED_TTL = 120.0
+
+
+@app.get("/api/credentials")
+def credentials(session: str | None = Cookie(default=None)):
+    """위성 자료 자격증명이 살아 있는지 알려준다.
+
+    분석을 눌러 실패를 겪기 전에 화면에서 먼저 알 수 있게 하려는 것이다.
+    """
+    require_auth(session)
+    import time as _t
+
+    now = _t.time()
+    if _cred_cache["value"] and now - _cred_cache["at"] < CRED_TTL:
+        return _cred_cache["value"]
+
+    sys.path.insert(0, str(ROOT))
+    try:
+        from paddy_check import AUTH_OK, check_auth
+        state, message = check_auth()
+        value = {"state": state, "ok": state == AUTH_OK, "message": message}
+    except Exception as exc:
+        value = {"state": "unknown", "ok": True,
+                 "message": f"자격증명 상태를 확인하지 못했습니다: {exc}"}
+
+    _cred_cache.update({"at": now, "value": value})
+    return value
 
 
 @app.post("/api/login")
@@ -350,7 +423,9 @@ async def analyze(payload: dict, request: Request,
         "min_days": int(_num(payload.get("min_days", 14), "기준일수", 1, 200)),
         "smooth": int(_num(payload.get("smooth", 3), "스무딩", 1, 9)),
         "source": payload.get("source", "auto"),
-        "nisar": bool(payload.get("nisar")),
+        # 단건 분석은 교차 검증을 기본으로 켠다. 결과 화면의 주 그래프가
+        # 두 센서를 겹쳐 그린 통합 그래프이기 때문이다.
+        "nisar": bool(payload.get("nisar", True)),
     }
 
     job = Job(id=uuid.uuid4().hex[:12], plots=plots, params=params)
@@ -544,6 +619,16 @@ def get_file(name: str, session: str | None = Cookie(default=None)):
     return FileResponse(path, media_type=media)
 
 
+@app.get("/healthz")
+def healthz():
+    """배포 플랫폼의 상태 점검용. 인증을 요구하지 않는다.
+
+    위성 자격증명 확인은 넣지 않는다 — 자격증명이 만료되었다고 컨테이너를
+    재시작해도 나아지지 않고, 재시작 루프만 생긴다. 그건 /api/credentials 로 본다.
+    """
+    return {"ok": True}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     # 브라우저가 옛 JS 를 캐시하면 수정 사항이 반영되지 않으므로 캐시를 금지한다.
@@ -560,9 +645,10 @@ def http_error(request, exc: HTTPException):
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="논물관리 이행 검증 웹 UI")
-    ap.add_argument("--host", default="127.0.0.1",
+    # 대부분의 배포 플랫폼(Render, Railway, Fly 등)은 PORT 환경변수로 포트를 준다.
+    ap.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"),
                     help="0.0.0.0 으로 열면 외부 접속 허용 (비밀번호 설정 권장)")
-    ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
     args = ap.parse_args()
 
     OUTDIR.mkdir(exist_ok=True)

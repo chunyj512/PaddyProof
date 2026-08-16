@@ -101,6 +101,24 @@ python auth_setup.py
 refresh token 이 `~/Library/openeo-python-client/refresh-tokens.json` (macOS) 에
 저장되며, 이후 `paddy_check.py` 는 이를 그대로 사용합니다.
 
+### 인증이 만료되면
+
+이 토큰은 며칠 쓰지 않으면 만료됩니다(`400 invalid_grant / Stale token`).
+만료된 상태로 실행하면 **분석 시작 몇 초 안에 그 사실을 알려주고 멈춥니다.**
+웹 화면에서는 접속하자마자 상단에 붉은 배너가 뜹니다.
+
+```bash
+python auth_setup.py
+```
+
+무인 환경(웹 서버, 스케줄러)에서는 `--non-interactive` 를 주세요. 아무도
+로그인 코드를 입력할 수 없는 곳에서 대화형 흐름으로 넘어가 기다리는 일을
+막습니다. 웹앱은 항상 이 옵션으로 실행합니다.
+
+서버로 상시 운영한다면 개인 로그인 대신 **CDSE 서비스 계정(client_credentials)**
+을 쓰세요. 만료가 없고 openEO·Sentinel Hub 두 경로 모두에 적용됩니다.
+설정 방법은 [DEPLOY.md](DEPLOY.md) 를 보세요.
+
 ### 데이터 경로 (`--source`)
 
 - `auto` (기본): openEO 로 시도하고, 백엔드 장애 시 **Sentinel Hub Statistical
@@ -142,13 +160,34 @@ NASA Earthdata 계정(무료)이 필요합니다. https://urs.earthdata.nasa.gov
 
 ### 사용
 
-교차 증거는 웹 단건 분석 결과에 **자동으로 표시**됩니다. 명령줄에서는:
+웹 단건 분석은 교차 검증을 **기본으로 수행**하며, 결과 화면의 주 그래프가
+두 센서를 겹쳐 그린 통합 그래프입니다. 명령줄에서는:
+
+```bash
+.venv/bin/python nisar_compare.py --lat 35.9820 --lon 126.9250 --start 2026-05-01 --end 2026-07-20
+```
 
 ```bash
 .venv/bin/python nisar_evidence.py --lat 35.9820 --lon 126.9250 --start 2026-06-17 --end 2026-08-03 --append
 ```
 
+`nisar_compare.py` 는 통합 그래프를, `nisar_evidence.py` 는 판정 표를 만듭니다.
 `--append` 를 주면 기존 S1 리포트 끝에 교차 증거 섹션을 덧붙입니다.
+
+### 통합 그래프 읽는 법
+
+두 센서 값이 모두 후방산란 dB 이므로 **같은 축 하나**에 겹쳐 그립니다
+(이중 y축을 쓰지 않습니다). 물리가 반대라는 점이 핵심입니다.
+
+| 신호 | 담수일 때 | 낙수일 때 |
+| --- | --- | --- |
+| S1 VH (C-band) | 낮음 | 높음 — 단, 캐노피가 자라도 높아짐 |
+| NISAR HH (L-band) | 높음 | 낮음 |
+
+따라서 두 선이 **반대로** 움직이면 판정이 맞은 것이고, **같이 올라가면**
+C-band 의 상승은 낙수가 아니라 벼가 자란 것입니다. NISAR 를 얻지 못한
+기간에도 같은 그래프를 그리고 그 사실을 그래프 안에 적습니다 — "아직 안 해 본 것"
+과 "할 수 없는 것"을 구분하기 위해서입니다.
 
 ### 판정 방식
 
@@ -169,7 +208,7 @@ NASA Earthdata 계정(무료)이 필요합니다. https://urs.earthdata.nasa.gov
 | --- | --- |
 | `nisar_source.py` | 시계열 추출 (부분 읽기 + 캐시). 단독 실행 가능 |
 | `nisar_evidence.py` | 교차 증거 생성, 리포트 덧붙이기 |
-| `nisar_compare.py` | C-band vs L-band 2단 비교 그래프 |
+| `nisar_compare.py` | C-band·L-band 를 한 축에 겹쳐 그린 통합 그래프 |
 | `nisar_scan.py` | 낙수 필지 탐색 (임계값 도출용) |
 | `nisar_probe.py` / `nisar_phase2.py` | 초기 타당성·물리 검증 (기록용) |
 
