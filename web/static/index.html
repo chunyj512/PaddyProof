@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>논물관리 이행 검증</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#fff; --ink:#1b2330; --muted:#6b7480; --line:#e2e6eb;
+    --accent:#1565c0; --water:#1565c0; --drain:#e65100;
+    --ok:#e8f5e9; --ok-ink:#1b5e20; --no:#fff3e0; --no-ink:#e65100;
+    --err:#ffebee; --err-ink:#b71c1c;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#12161c; --panel:#1a1f27; --ink:#e6eaf0; --muted:#9aa4b2;
+      --line:#2b323c; --ok:#14301a; --ok-ink:#7fd68a; --no:#3a2510; --no-ink:#ffb163;
+      --err:#3a1518; --err-ink:#ff9a9a; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 20px;
+    display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  header h1{font-size:17px;margin:0;font-weight:650}
+  header .sub{color:var(--muted);font-size:12.5px}
+  .wrap{max-width:1280px;margin:0 auto;padding:18px 20px 60px}
+  .tabs{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--line)}
+  .tabs button{background:none;border:0;padding:9px 16px;font-size:14px;color:var(--muted);
+    cursor:pointer;border-bottom:2px solid transparent;font-family:inherit}
+  .tabs button.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+  .grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .card h2{font-size:13px;margin:0 0 12px;font-weight:650;color:var(--muted);
+    text-transform:uppercase;letter-spacing:.4px}
+  #map{height:420px;border-radius:8px;border:1px solid var(--line);z-index:0}
+  .hint{font-size:12.5px;color:var(--muted);margin:8px 0 0}
+  label{display:block;font-size:12.5px;color:var(--muted);margin:10px 0 4px}
+  input,select{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:7px;
+    background:var(--bg);color:var(--ink);font:inherit;font-size:13.5px}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  button.go{width:100%;margin-top:16px;padding:11px;background:var(--accent);color:#fff;
+    border:0;border-radius:8px;font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+  button.go:disabled{opacity:.5;cursor:default}
+  button.ghost{padding:7px 12px;background:none;border:1px solid var(--line);
+    border-radius:7px;color:var(--ink);font:inherit;font-size:12.5px;cursor:pointer}
+  details.adv{margin-top:12px}
+  details.adv summary{font-size:12.5px;color:var(--muted);cursor:pointer;padding:4px 0}
+  .verdict{display:inline-block;padding:5px 14px;border-radius:999px;font-weight:700;font-size:15px}
+  .v-ok{background:var(--ok);color:var(--ok-ink)}
+  .v-no{background:var(--no);color:var(--no-ink)}
+  .v-err{background:var(--err);color:var(--err-ink)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .log{background:#0d1117;color:#c9d1d9;border-radius:8px;padding:10px 12px;
+    font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;max-height:180px;
+    overflow:auto;white-space:pre-wrap;word-break:break-all}
+  .bar{height:6px;background:var(--line);border-radius:999px;overflow:hidden;margin:10px 0}
+  .bar>i{display:block;height:100%;background:var(--accent);width:0;transition:width .3s}
+  img.plot{width:100%;border-radius:8px;border:1px solid var(--line);margin-top:12px;background:#fff}
+  .files a{margin-right:14px;font-size:12.5px;color:var(--accent)}
+  .muted{color:var(--muted)}
+  .warn{background:var(--no);color:var(--no-ink);padding:10px 12px;border-radius:8px;
+    font-size:12.5px;margin-top:12px}
+  .err{background:var(--err);color:var(--err-ink);padding:10px 12px;border-radius:8px;
+    font-size:12.5px;margin-top:12px;white-space:pre-wrap}
+  .hidden{display:none}
+  .pill{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--bg);
+    border:1px solid var(--line);color:var(--muted)}
+  .drop{border:2px dashed var(--line);border-radius:10px;padding:26px;text-align:center;
+    color:var(--muted);font-size:13px;cursor:pointer}
+  .drop.over{border-color:var(--accent);color:var(--accent)}
+  .stat{display:flex;gap:20px;margin:12px 0;flex-wrap:wrap}
+  .stat div{font-size:12.5px;color:var(--muted)}
+  .stat b{display:block;font-size:22px;color:var(--ink);font-weight:650;
+    font-variant-numeric:tabular-nums}
+  tr.clickable{cursor:pointer}
+  tr.clickable:hover{background:var(--bg)}
+  dialog{border:1px solid var(--line);border-radius:12px;background:var(--panel);
+    color:var(--ink);max-width:min(920px,92vw);padding:0}
+  dialog::backdrop{background:rgba(0,0,0,.5)}
+  .dlg-head{display:flex;justify-content:space-between;align-items:center;
+    padding:14px 18px;border-bottom:1px solid var(--line)}
+  .dlg-body{padding:18px;max-height:72vh;overflow:auto}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>논물관리 이행 검증</h1>
+  <span class="sub">Sentinel-1 SAR 기반 담수·낙수 판별</span>
+  <span class="sub" id="authState"></span>
+</header>
+
+<!-- 로그인 -->
+<div class="wrap hidden" id="loginPane">
+  <div class="card" style="max-width:360px;margin:60px auto">
+    <h2>접속 비밀번호</h2>
+    <input type="password" id="pw" placeholder="비밀번호" autofocus>
+    <button class="go" id="loginBtn">들어가기</button>
+    <div class="err hidden" id="loginErr"></div>
+  </div>
+</div>
+
+<div class="wrap hidden" id="app">
+  <div class="tabs">
+    <button class="on" data-tab="single">단건 분석</button>
+    <button data-tab="batch">일괄 분석</button>
+    <button data-tab="history">지난 결과</button>
+  </div>
+
+  <!-- ============ 단건 ============ -->
+  <section id="tab-single">
+    <div class="grid">
+      <div class="card">
+        <h2>필지 위치</h2>
+        <div id="map"></div>
+        <p class="hint">위성사진 위에서 논을 찾아 클릭하세요. 필지 <b>중앙</b>을 찍어야
+          가장자리 논둑·도로가 섞이지 않습니다.</p>
+      </div>
+
+      <div class="card">
+        <h2>분석 조건</h2>
+        <div class="row">
+          <div><label>위도</label><input id="lat" value="35.9820"></div>
+          <div><label>경도</label><input id="lon" value="126.9250"></div>
+        </div>
+        <div class="row">
+          <div><label>시작일</label><input type="date" id="start"></div>
+          <div><label>종료일</label><input type="date" id="end"></div>
+        </div>
+        <p class="hint" id="periodHint"></p>
+
+        <details class="adv">
+          <summary>고급 설정</summary>
+          <div class="row">
+            <div><label>담수 임계값 (dB)</label><input id="threshold" value="-20"></div>
+            <div><label>기준 일수</label><input id="minDays" value="14"></div>
+          </div>
+          <div class="row">
+            <div><label>버퍼 반경 (m)</label><input id="buffer" value="40"></div>
+            <div><label>이동평균 (점)</label><input id="smooth" value="3"></div>
+          </div>
+          <label>데이터 경로</label>
+          <select id="source">
+            <option value="auto">자동 (openEO → Sentinel Hub 폴백)</option>
+            <option value="openeo">openEO 고정</option>
+            <option value="sentinelhub">Sentinel Hub 고정</option>
+          </select>
+        </details>
+
+        <button class="go" id="runBtn">분석 실행</button>
+        <div class="hint" style="text-align:center;margin-top:8px">약 30초 걸립니다</div>
+      </div>
+    </div>
+
+    <div class="card hidden" id="sProgress" style="margin-top:16px">
+      <h2>진행 상황</h2>
+      <div class="bar"><i id="sBar"></i></div>
+      <div class="log" id="sLog"></div>
+    </div>
+
+    <div class="card hidden" id="sResult" style="margin-top:16px"></div>
+  </section>
+
+  <!-- ============ 일괄 ============ -->
+  <section id="tab-batch" class="hidden">
+    <div class="grid">
+      <div class="card">
+        <h2>필지 목록</h2>
+        <div class="drop" id="drop">
+          CSV 파일을 끌어다 놓거나 클릭해서 선택<br>
+          <span class="muted">형식: 이름,위도,경도 &nbsp;(헤더 있어도 됨)</span>
+        </div>
+        <input type="file" id="file" accept=".csv,.txt" class="hidden">
+        <div style="margin-top:10px">
+          <button class="ghost" id="sampleBtn">예시 CSV 받기</button>
+          <button class="ghost" id="clearBtn">목록 비우기</button>
+        </div>
+        <div id="bList" style="margin-top:14px"></div>
+      </div>
+
+      <div class="card">
+        <h2>공통 조건</h2>
+        <div class="row">
+          <div><label>시작일</label><input type="date" id="bStart"></div>
+          <div><label>종료일</label><input type="date" id="bEnd"></div>
+        </div>
+        <details class="adv">
+          <summary>고급 설정</summary>
+          <div class="row">
+            <div><label>담수 임계값 (dB)</label><input id="bThreshold" value="-20"></div>
+            <div><label>기준 일수</label><input id="bMinDays" value="14"></div>
+          </div>
+          <div class="row">
+            <div><label>버퍼 반경 (m)</label><input id="bBuffer" value="40"></div>
+            <div><label>이동평균 (점)</label><input id="bSmooth" value="3"></div>
+          </div>
+        </details>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+          <input type="checkbox" id="bNisar" style="width:auto">
+          <span>NISAR L-band 교차 증거 포함
+            <span class="muted">(첫 조회는 필지당 수 분)</span></span>
+        </label>
+        <button class="go" id="bRunBtn" disabled>일괄 실행</button>
+        <button class="ghost hidden" id="bCancelBtn" style="width:100%;margin-top:8px">중단</button>
+        <div class="hint" style="text-align:center;margin-top:8px" id="bEta"></div>
+      </div>
+    </div>
+
+    <div class="card hidden" id="bResult" style="margin-top:16px">
+      <h2>결과</h2>
+      <div class="bar"><i id="bBar"></i></div>
+      <div class="stat" id="bStat"></div>
+      <div style="overflow-x:auto"><table id="bTable"></table></div>
+      <div style="margin-top:12px">
+        <button class="ghost" id="bDownload">요약 CSV 내려받기</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 이력 ============ -->
+  <section id="tab-history" class="hidden">
+    <div class="card">
+      <h2>지난 결과</h2>
+      <div style="overflow-x:auto"><table id="hTable"></table></div>
+    </div>
+  </section>
+</div>
+
+<dialog id="dlg">
+  <div class="dlg-head">
+    <b id="dlgTitle"></b>
+    <button class="ghost" onclick="document.getElementById('dlg').close()">닫기</button>
+  </div>
+  <div class="dlg-body" id="dlgBody"></div>
+</dialog>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// ---------- 기본 기간: 올해 5/1 ~ 7/20 (캐노피 영향 전) ----------
+const YEAR = new Date().getFullYear();
+const DEFAULT_START = `${YEAR}-05-01`, DEFAULT_END = `${YEAR}-07-20`;
+for (const [s,e] of [['#start','#end'], ['#bStart','#bEnd']]) {
+  $(s).value = DEFAULT_START; $(e).value = DEFAULT_END;
+}
+$('#periodHint').innerHTML =
+  '기본값은 이앙기~7월 중순입니다. 이후 구간은 벼 캐노피 때문에 담수여도 ' +
+  '낙수로 잡히므로 중간물떼기 판정에는 넣지 않는 편이 안전합니다.';
+
+// ---------- 인증 ----------
+async function boot() {
+  const r = await fetch('/api/auth').then(r => r.json());
+  if (r.required && !r.ok) {
+    $('#loginPane').classList.remove('hidden');
+    $('#authState').textContent = '';
+  } else {
+    $('#app').classList.remove('hidden');
+    $('#authState').innerHTML = r.required
+      ? '<span class="pill">로그인됨</span>' : '<span class="pill">로컬 전용</span>';
+    initMap();
+  }
+}
+$('#loginBtn').onclick = async () => {
+  const fd = new FormData(); fd.append('password', $('#pw').value);
+  const res = await fetch('/api/login', {method:'POST', body:fd});
+  if (res.ok) location.reload();
+  else { $('#loginErr').textContent = '비밀번호가 틀렸습니다.';
+         $('#loginErr').classList.remove('hidden'); }
+};
+$('#pw')?.addEventListener('keydown', e => { if (e.key === 'Enter') $('#loginBtn').click(); });
+
+// ---------- 탭 ----------
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  ['single','batch','history'].forEach(t =>
+    $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab));
+  if (b.dataset.tab === 'history') loadHistory();
+  if (b.dataset.tab === 'single') setTimeout(() => map && map.invalidateSize(), 50);
+});
+
+// ---------- 지도 ----------
+let map, marker, circle;
+function initMap() {
+  const lat = +$('#lat').value, lon = +$('#lon').value;
+  map = L.map('map').setView([lat, lon], 15);
+  const sat = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    {maxZoom:19, attribution:'Esri World Imagery'}).addTo(map);
+  const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    {maxZoom:19, attribution:'© OpenStreetMap'});
+  L.control.layers({'위성사진':sat, '일반지도':osm}).addTo(map);
+  setMarker(lat, lon);
+  map.on('click', e => {
+    $('#lat').value = e.latlng.lat.toFixed(5);
+    $('#lon').value = e.latlng.lng.toFixed(5);
+    setMarker(e.latlng.lat, e.latlng.lng);
+  });
+  for (const id of ['#lat','#lon']) $(id).addEventListener('change', () => {
+    const la = +$('#lat').value, lo = +$('#lon').value;
+    if (isFinite(la) && isFinite(lo)) { setMarker(la, lo); map.setView([la, lo]); }
+  });
+}
+function setMarker(lat, lon) {
+  const r = +$('#buffer').value || 40;
+  if (marker) { marker.setLatLng([lat, lon]); circle.setLatLng([lat, lon]).setRadius(r); }
+  else {
+    marker = L.marker([lat, lon]).addTo(map);
+    circle = L.circle([lat, lon], {radius:r, color:'#1565c0', weight:2,
+      fillOpacity:.12}).addTo(map);
+  }
+}
+$('#buffer').addEventListener('change', () =>
+  circle && circle.setRadius(+$('#buffer').value || 40));
+
+// ---------- 공통: 작업 스트리밍 ----------
+// 열려 있는 SSE 연결을 추적한다. 안 닫고 쌓이면 브라우저의 호스트당 동시 연결
+// 한도(약 6개)에 걸려 이후 모든 요청이 무한 대기한다.
+const openStreams = new Set();
+function closeAllStreams() {
+  for (const es of openStreams) { try { es.close(); } catch {} }
+  openStreams.clear();
+}
+function streamJob(jobId, {onLog, onPlot, onDone}) {
+  closeAllStreams();
+  const es = new EventSource(`/api/jobs/${jobId}/stream`);
+  openStreams.add(es);
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    try { es.close(); } catch {}
+    openStreams.delete(es);
+    onDone?.();
+  };
+  es.onmessage = ev => {
+    const d = JSON.parse(ev.data);
+    if (d.kind === 'log') onLog?.(d);
+    else if (d.kind === 'plot') onPlot?.(d);
+    else if (d.kind === 'done') finish();
+  };
+  es.onerror = finish;
+  return es;
+}
+// 탭을 닫거나 새로고침할 때도 정리한다.
+window.addEventListener('beforeunload', closeAllStreams);
+function params(prefix) {
+  const p = prefix ? {
+    start:$('#bStart').value, end:$('#bEnd').value,
+    threshold:$('#bThreshold').value, min_days:$('#bMinDays').value,
+    buffer:$('#bBuffer').value, smooth:$('#bSmooth').value, source:'auto',
+    nisar:$('#bNisar').checked
+  } : {
+    start:$('#start').value, end:$('#end').value,
+    threshold:$('#threshold').value, min_days:$('#minDays').value,
+    buffer:$('#buffer').value, smooth:$('#smooth').value, source:$('#source').value
+  };
+  return p;
+}
+
+// ---------- 단건 실행 ----------
+const STEP_PCT = {'[1/5]':15,'[2/5]':45,'[3/5]':70,'[4/5]':85,'[5/5]':95};
+$('#runBtn').onclick = async () => {
+  const btn = $('#runBtn'); btn.disabled = true; btn.textContent = '분석 중…';
+  $('#sProgress').classList.remove('hidden');
+  $('#sResult').classList.add('hidden');
+  $('#sLog').textContent = ''; $('#sBar').style.width = '5%';
+
+  let res;
+  try {
+    res = await fetch('/api/analyze', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({plots:[{name:'필지', lat:$('#lat').value, lon:$('#lon').value}],
+                            ...params(false)})
+    });
+  } catch (e) { return fail('서버에 연결할 수 없습니다.'); }
+  if (!res.ok) return fail((await res.json()).detail);
+
+  const {job_id} = await res.json();
+  let last = null;
+  streamJob(job_id, {
+    onLog: d => {
+      const el = $('#sLog');
+      el.textContent += d.line + '\n'; el.scrollTop = el.scrollHeight;
+      for (const k in STEP_PCT) if (d.line.includes(k)) $('#sBar').style.width = STEP_PCT[k] + '%';
+    },
+    onPlot: d => { last = d.plot; },
+    onDone: () => {
+      $('#sBar').style.width = '100%';
+      btn.disabled = false; btn.textContent = '분석 실행';
+      if (last) showSingle(last);
+    }
+  });
+
+  function fail(msg) {
+    btn.disabled = false; btn.textContent = '분석 실행';
+    $('#sResult').innerHTML = `<div class="err">${esc(msg)}</div>`;
+    $('#sResult').classList.remove('hidden');
+  }
+};
+
+async function showSingle(p) {
+  const box = $('#sResult'); box.classList.remove('hidden');
+  if (p.status === '실패') {
+    box.innerHTML = `<h2>결과</h2><div class="err">${esc(p.error || '실패')}</div>`;
+    return;
+  }
+  const cls = p.verdict === '이행' ? 'v-ok' : 'v-no';
+  box.innerHTML = `
+    <h2>결과</h2>
+    <div><span class="verdict ${cls}">${esc(p.verdict)}</span>
+      <span class="muted" style="margin-left:12px">최장 연속 낙수
+      <b>${p.longest}일</b> / 기준 ${$('#minDays').value}일</span></div>
+    <div class="stat">
+      <div>관측 횟수<b>${p.n_obs ?? '-'}</b></div>
+      <div>데이터 경로<b style="font-size:15px">${esc(p.source || 'openEO')}</b></div>
+      <div>좌표<b style="font-size:15px">${(+$('#lat').value).toFixed(4)}, ${(+$('#lon').value).toFixed(4)}</b></div>
+    </div>
+    ${p.png ? `<img class="plot" src="/api/files/${p.png}">` : ''}
+    <div id="sens"></div>
+    <div id="nisar"></div>
+    <div class="files" style="margin-top:14px">
+      ${p.png ? `<a href="/api/files/${p.png}" download>그래프 PNG</a>` : ''}
+      ${p.md ? `<a href="/api/files/${p.md}" download>리포트 MD</a>
+                <a href="#" id="viewMd">리포트 보기</a>` : ''}
+      ${p.csv ? `<a href="/api/files/${p.csv}" download>원자료 CSV</a>` : ''}
+    </div>`;
+
+  if (p.md) $('#viewMd').onclick = async e => {
+    e.preventDefault();
+    const t = await fetch('/api/files/' + p.md).then(r => r.text());
+    $('#dlgTitle').textContent = '분석 리포트';
+    $('#dlgBody').innerHTML = `<pre style="white-space:pre-wrap;font:13px/1.7 inherit">${esc(t)}</pre>`;
+    $('#dlg').showModal();
+  };
+
+  // 임계값 민감도
+  if (p.csv) {
+    const q = new URLSearchParams({csv:p.csv, min_days:$('#minDays').value,
+                                  threshold:$('#threshold').value});
+    try {
+      const {rows} = await fetch('/api/sensitivity?' + q).then(r => r.json());
+      const flip = new Set(rows.map(r => r.verdict)).size > 1;
+      $('#sens').innerHTML = `
+        <h2 style="margin-top:18px">임계값 민감도</h2>
+        ${flip ? `<div class="warn"><b>주의 — 경계 사례입니다.</b>
+          임계값을 ±1 dB 안에서 바꾸면 판정이 뒤집힙니다.
+          이 필지는 위성만으로 단정하기 어려우니 현장 확인을 권합니다.</div>` :
+          `<div class="hint">임계값을 ±1 dB 흔들어도 판정이 <b>${esc(rows[0].verdict)}</b>로
+           유지됩니다. 판정이 안정적입니다.</div>`}
+        <table style="margin-top:10px"><tr><th>임계값</th><th class="num">최장 낙수</th>
+          <th>판정</th></tr>
+          ${rows.map(r => `<tr${r.is_base ? ' style="font-weight:650"' : ''}>
+            <td>${r.threshold} dB${r.is_base ? ' (현재)' : ''}</td>
+            <td class="num">${r.longest}일</td>
+            <td><span class="verdict ${r.verdict === '이행' ? 'v-ok' : 'v-no'}"
+              style="font-size:12px;padding:2px 10px">${r.verdict}</span></td></tr>`).join('')}
+        </table>`;
+    } catch { /* 민감도는 부가 정보이므로 실패해도 결과는 그대로 보여준다 */ }
+  }
+
+  if (p.csv) loadNisar(p.csv);
+}
+
+// ---------- NISAR L-band 교차 증거 ----------
+function nisarBadge(v) {
+  if (!v) return '<span class="muted">-</span>';
+  const map = {
+    s1_overestimate: ['과대판정 의심', 'v-no'],
+    agree:           ['일치', 'v-ok'],
+    unclear:         ['보류', ''],
+    no_data:         ['자료 없음', ''],
+    error:           ['오류', 'v-err'],
+  };
+  const [t, cls] = map[v] || [v, ''];
+  return cls
+    ? `<span class="verdict ${cls}" style="font-size:12px;padding:2px 10px">${t}</span>`
+    : `<span class="muted">${t}</span>`;
+}
+const NISAR_LABEL = {
+  s1_overestimate: {t:'S1 과대판정 의심', cls:'warn'},
+  agree:           {t:'두 센서 일치',     cls:'hint'},
+  unclear:         {t:'판단 보류',        cls:'hint'},
+  no_data:         {t:'교차 검증 불가',   cls:'hint'},
+};
+async function loadNisar(csvName) {
+  const box = $('#nisar');
+  box.innerHTML = `<h2 style="margin-top:18px">NISAR L-band 교차 증거</h2>
+    <div class="hint">조회 중… (위성 자료를 원격에서 읽습니다, 최대 1분)</div>`;
+  const q = new URLSearchParams({csv:csvName, lat:$('#lat').value,
+                                 lon:$('#lon').value, buffer:$('#buffer').value});
+  // 응답이 안 오면 무한 대기하지 않고 명확히 실패를 알린다.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 240000);
+  let res;
+  try {
+    res = await fetch('/api/nisar?' + q, {signal: ctrl.signal});
+  } catch (e) {
+    clearTimeout(timer);
+    box.innerHTML = `<h2 style="margin-top:18px">NISAR L-band 교차 증거</h2>
+      <div class="err">${e.name === 'AbortError'
+        ? '조회 시간이 초과되었습니다 (4분). 위성 자료 서버가 느리거나 다른 작업이 대역폭을 쓰고 있을 수 있습니다. 잠시 후 다시 시도하세요.'
+        : '조회에 실패했습니다: ' + esc(e.message)}</div>`;
+    return;
+  }
+  clearTimeout(timer);
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { msg = (await res.json()).detail || msg; } catch {}
+    box.innerHTML = `<h2 style="margin-top:18px">NISAR L-band 교차 증거</h2>
+      <div class="err">${esc(msg)}</div>`;
+    return;
+  }
+  const d = await res.json();
+  const meta = NISAR_LABEL[d.verdict] || NISAR_LABEL.unclear;
+
+  box.innerHTML = `
+    <h2 style="margin-top:18px">NISAR L-band 교차 증거</h2>
+    <div class="${meta.cls}"><b>${meta.t}</b> — ${esc(d.reason)}</div>
+    ${d.png ? `<img class="plot" src="/api/files/${d.png}?t=${Date.now()}">` : ''}
+    ${d.hh_diff !== undefined ? `
+      <table style="margin-top:10px">
+        <tr><th>구분</th><th class="num">NISAR HH 평균</th><th class="num">관측</th></tr>
+        <tr><td>S1 담수 판정 시점</td><td class="num">${d.hh_ponded.toFixed(2)} dB</td>
+          <td class="num">${d.n_ponded}건</td></tr>
+        <tr><td>S1 낙수 판정 시점</td><td class="num">${d.hh_drained.toFixed(2)} dB</td>
+          <td class="num">${d.n_drained}건</td></tr>
+        <tr style="font-weight:650"><td>차이</td>
+          <td class="num">${d.hh_diff > 0 ? '+' : ''}${d.hh_diff.toFixed(2)} dB</td><td></td></tr>
+      </table>` : ''}
+    ${(d.rows || []).length ? `
+      <details style="margin-top:10px"><summary class="muted"
+        style="cursor:pointer;font-size:12.5px">NISAR 관측값 ${d.rows.length}건 보기</summary>
+        <table style="margin-top:8px">
+          <tr><th>날짜</th><th class="num">HH</th><th class="num">HV</th>
+            <th class="num">HH-HV</th><th>S1 판정</th></tr>
+          ${d.rows.map(r => `<tr><td>${esc(r.date)}</td>
+            <td class="num">${r.hh_db.toFixed(2)}</td>
+            <td class="num">${r.hv_db.toFixed(2)}</td>
+            <td class="num">${r.hh_hv.toFixed(2)}</td>
+            <td>${esc(r.s1_state || '-')}</td></tr>`).join('')}
+        </table></details>` : ''}
+    <p class="hint">L-band(24 cm)는 벼 캐노피를 투과해 수면-줄기 이중반사를 봅니다.
+      판정 주체는 Sentinel-1 이며, NISAR 는 그 판정이 캐노피 성장에 속은 것은 아닌지만
+      점검합니다. NISAR 공개분은 2026-06-17 이후입니다.</p>`;
+}
+
+// ---------- 일괄 ----------
+let bPlots = [], bJob = null, bRows = [];
+$('#drop').onclick = () => $('#file').click();
+$('#drop').ondragover = e => { e.preventDefault(); $('#drop').classList.add('over'); };
+$('#drop').ondragleave = () => $('#drop').classList.remove('over');
+$('#drop').ondrop = e => {
+  e.preventDefault(); $('#drop').classList.remove('over');
+  if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+};
+$('#file').onchange = e => e.target.files[0] && upload(e.target.files[0]);
+
+async function upload(f) {
+  const fd = new FormData(); fd.append('file', f);
+  const res = await fetch('/api/parse-csv', {method:'POST', body:fd});
+  if (!res.ok) {
+    $('#bList').innerHTML = `<div class="err">${esc((await res.json()).detail)}</div>`;
+    return;
+  }
+  const d = await res.json();
+  bPlots = d.plots;
+  renderList(d.errors);
+}
+function renderList(errors = []) {
+  $('#bRunBtn').disabled = bPlots.length === 0;
+  $('#bEta').textContent = bPlots.length
+    ? `${bPlots.length}필지 · 예상 ${Math.ceil(bPlots.length * 30 / 60)}분` : '';
+  $('#bList').innerHTML = bPlots.length ? `
+    <div class="muted" style="font-size:12.5px;margin-bottom:6px">${bPlots.length}필지</div>
+    <div style="max-height:260px;overflow:auto"><table>
+      <tr><th>이름</th><th class="num">위도</th><th class="num">경도</th></tr>
+      ${bPlots.map(p => `<tr><td>${esc(p.name)}</td><td class="num">${p.lat.toFixed(5)}</td>
+        <td class="num">${p.lon.toFixed(5)}</td></tr>`).join('')}
+    </table></div>
+    ${errors.length ? `<div class="warn">건너뛴 줄: ${errors.map(esc).join(', ')}</div>` : ''}`
+    : '';
+}
+$('#clearBtn').onclick = () => { bPlots = []; renderList(); };
+$('#sampleBtn').onclick = () => {
+  const csv = '이름,위도,경도\n익산 논,35.9820,126.9250\n논산 논,36.1600,127.0500\n' +
+              '김제 논,35.8600,126.9500\n';
+  dl(new Blob([`﻿${csv}`], {type:'text/csv'}), '필지목록_예시.csv');
+};
+
+$('#bRunBtn').onclick = async () => {
+  $('#bRunBtn').disabled = true; $('#bCancelBtn').classList.remove('hidden');
+  $('#bResult').classList.remove('hidden');
+  bRows = bPlots.map(p => ({...p, status:'대기'}));
+  drawBatch();
+
+  const res = await fetch('/api/analyze', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({plots:bPlots, ...params(true)})
+  });
+  if (!res.ok) {
+    $('#bResult').innerHTML += `<div class="err">${esc((await res.json()).detail)}</div>`;
+    $('#bRunBtn').disabled = false; return;
+  }
+  const {job_id} = await res.json(); bJob = job_id;
+  streamJob(job_id, {
+    onPlot: d => { bRows[d.index] = {...bRows[d.index], ...d.plot}; drawBatch(); },
+    onDone: () => {
+      $('#bRunBtn').disabled = false;
+      $('#bCancelBtn').classList.add('hidden');
+      $('#bBar').style.width = '100%';
+    }
+  });
+};
+$('#bCancelBtn').onclick = () => bJob && fetch(`/api/jobs/${bJob}/cancel`, {method:'POST'});
+
+function drawBatch() {
+  const done = bRows.filter(r => ['완료','실패','취소'].includes(r.status)).length;
+  $('#bBar').style.width = (done / bRows.length * 100) + '%';
+  const ok = bRows.filter(r => r.verdict === '이행').length;
+  const no = bRows.filter(r => r.verdict === '미이행').length;
+  const er = bRows.filter(r => r.status === '실패').length;
+  $('#bStat').innerHTML = `
+    <div>진행<b>${done} / ${bRows.length}</b></div>
+    <div>이행<b style="color:var(--ok-ink)">${ok}</b></div>
+    <div>미이행<b style="color:var(--no-ink)">${no}</b></div>
+    ${er ? `<div>실패<b style="color:var(--err-ink)">${er}</b></div>` : ''}`;
+  const withNisar = $('#bNisar').checked;
+  $('#bTable').innerHTML = `
+    <tr><th>이름</th><th class="num">위도</th><th class="num">경도</th><th>상태</th>
+      <th class="num">최장 낙수</th><th>판정</th>${withNisar ? '<th>NISAR</th>' : ''}<th></th></tr>
+    ${bRows.map((r, i) => `<tr>
+      <td>${esc(r.name)}</td><td class="num">${(+r.lat).toFixed(4)}</td>
+      <td class="num">${(+r.lon).toFixed(4)}</td>
+      <td>${r.status === '진행' ? '<span class="muted">분석 중…</span>' : esc(r.status)}</td>
+      <td class="num">${r.longest != null ? r.longest + '일' : '-'}</td>
+      <td>${r.verdict ? `<span class="verdict ${r.verdict === '이행' ? 'v-ok' : 'v-no'}"
+        style="font-size:12px;padding:2px 10px">${r.verdict}</span>`
+        : (r.error ? `<span class="verdict v-err" style="font-size:12px;padding:2px 10px"
+           title="${esc(r.error)}">오류</span>` : '')}</td>
+      ${withNisar ? `<td>${nisarBadge(r.nisar)}</td>` : ''}
+      <td>${r.png ? `<button class="ghost" onclick="peek(${i})">보기</button>` : ''}</td>
+    </tr>`).join('')}`;
+}
+window.peek = i => {
+  const r = bRows[i];
+  $('#dlgTitle').textContent = r.name;
+  $('#dlgBody').innerHTML = `<img class="plot" src="/api/files/${r.png}">
+    <div class="files" style="margin-top:12px">
+      <a href="/api/files/${r.png}" download>PNG</a>
+      ${r.md ? `<a href="/api/files/${r.md}" download>리포트</a>` : ''}
+      ${r.csv ? `<a href="/api/files/${r.csv}" download>CSV</a>` : ''}</div>`;
+  $('#dlg').showModal();
+};
+$('#bDownload').onclick = () => {
+  const nisarKo = v => ({s1_overestimate:'과대판정 의심', agree:'일치',
+                         unclear:'보류', no_data:'자료 없음', error:'오류'}[v] || '');
+  const head = '이름,위도,경도,상태,최장연속낙수일,판정,NISAR교차증거,관측수,오류\n';
+  const body = bRows.map(r => [r.name, r.lat, r.lon, r.status, r.longest ?? '',
+    r.verdict ?? '', nisarKo(r.nisar), r.n_obs ?? '', (r.error ?? '').replace(/[\n,]/g, ' ')]
+    .map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  dl(new Blob([`﻿${head}${body}`], {type:'text/csv'}), '논물관리_일괄결과.csv');
+};
+function dl(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------- 이력 ----------
+async function loadHistory() {
+  const {items} = await fetch('/api/history').then(r => r.json());
+  $('#hTable').innerHTML = items.length ? `
+    <tr><th>실행 시각</th><th>좌표</th><th>기간</th><th class="num">최장 낙수</th>
+      <th>판정</th><th></th></tr>
+    ${items.map(it => `<tr>
+      <td class="muted">${esc(it.when)}</td>
+      <td>${esc(it.lat)}, ${esc(it.lon)}</td>
+      <td class="muted">${esc(it.period)}</td>
+      <td class="num">${it.longest != null ? it.longest + '일' : '-'}</td>
+      <td>${it.verdict ? `<span class="verdict ${it.verdict === '이행' ? 'v-ok' : 'v-no'}"
+        style="font-size:12px;padding:2px 10px">${it.verdict}</span>` : '-'}</td>
+      <td>${it.png ? `<button class="ghost"
+        onclick="peekHist('${esc(it.stem)}','${esc(it.png)}')">보기</button>` : ''}</td>
+    </tr>`).join('')}`
+    : '<tr><td class="muted">아직 결과가 없습니다.</td></tr>';
+}
+window.peekHist = (stem, png) => {
+  $('#dlgTitle').textContent = stem;
+  $('#dlgBody').innerHTML = `<img class="plot" src="/api/files/${png}">
+    <div class="files" style="margin-top:12px">
+      <a href="/api/files/${png}" download>PNG</a>
+      <a href="/api/files/${stem}.md" download>리포트</a>
+      <a href="/api/files/${stem}.csv" download>CSV</a></div>`;
+  $('#dlg').showModal();
+};
+
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+openeo>=0.31
+pandas>=2.0
+matplotlib>=3.7
+
+# 웹 프론트엔드 (web/app.py)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+
+# NISAR L-band 교차 검증 (nisar_*.py)
+earthaccess>=0.14
+h5py>=3.10
+pyproj>=3.6

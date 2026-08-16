@@ -1,0 +1,22 @@
+# 자격증명 — 절대 커밋 금지
+.env
+*.netrc
+refresh-tokens.json
+secrets/
+
+# 가상환경
+.venv/
+__pycache__/
+*.pyc
+
+# 실행 결과 (용량이 커지고 개인 필지 좌표가 담김)
+output/
+*.png
+*.csv
+!필지목록_예시.csv
+
+# OS
+.DS_Store
+
+# 로컬 개발 설정 (절대경로 포함)
+.claude/
