@@ -94,6 +94,43 @@ def save_cache(cache: dict) -> None:
     CACHE.write_text(json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def _earthdata_login(earthaccess):
+    """Earthdata 에 로그인한다. 로컬은 ~/.netrc, 서버는 환경변수를 쓴다.
+
+    컨테이너에는 홈 디렉터리에 .netrc 가 없다. 배포 환경에서는
+    EARTHDATA_USERNAME / EARTHDATA_PASSWORD 를 넣고, earthaccess 가 읽는
+    이름(EARTHDATA_LOGIN) 으로도 맞춰 준다.
+    """
+    import os  # noqa: PLC0415
+
+    user = os.environ.get("EARTHDATA_USERNAME")
+    pw = os.environ.get("EARTHDATA_PASSWORD")
+
+    strategies = []
+    if user and pw:
+        os.environ.setdefault("EARTHDATA_LOGIN", user)
+        strategies.append("environment")
+    strategies.append("netrc")
+
+    errors = []
+    for how in strategies:
+        try:
+            auth = earthaccess.login(strategy=how)
+        except Exception as exc:
+            errors.append(f"{how}: {exc}")
+            continue
+        if getattr(auth, "authenticated", False):
+            return auth
+        errors.append(f"{how}: 인증되지 않음")
+
+    raise NisarError(
+        "Earthdata 인증에 실패했습니다 (" + " / ".join(errors) + ").\n"
+        "  로컬에서는 아래를 한 번 실행하세요:\n"
+        '    python -c "import earthaccess; earthaccess.login(persist=True)"\n'
+        "  서버에서는 EARTHDATA_USERNAME / EARTHDATA_PASSWORD 환경변수를 넣으세요."
+    )
+
+
 def fetch_timeseries(lat: float, lon: float, start: str, end: str,
                      buffer_m: float = DEFAULT_BUFFER_M,
                      use_cache: bool = True, verbose: bool = True) -> list[dict]:
@@ -109,15 +146,7 @@ def fetch_timeseries(lat: float, lon: float, start: str, end: str,
             "  pip install earthaccess h5py pyproj"
         ) from exc
 
-    try:
-        auth = earthaccess.login(strategy="netrc")
-    except Exception as exc:
-        raise NisarError(f"Earthdata 인증 실패: {exc}") from exc
-    if not getattr(auth, "authenticated", False):
-        raise NisarError(
-            "Earthdata 인증이 되어 있지 않습니다. 아래를 먼저 실행하세요:\n"
-            '  python -c "import earthaccess; earthaccess.login(persist=True)"'
-        )
+    auth = _earthdata_login(earthaccess)
 
     if verbose:
         print(f"[1/3] 그래뉼 검색: {lat}, {lon} | {start} ~ {end}")

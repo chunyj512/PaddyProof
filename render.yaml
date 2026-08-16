@@ -1,0 +1,48 @@
+# Render 배포 설정 (Blueprint)
+#
+# 쓰는 법: Render 대시보드 → New → Blueprint → 이 저장소를 선택.
+# 아래 sync:false 로 표시된 값들은 Render 가 배포 중에 물어봅니다.
+# 자격증명은 이 파일에 절대 적지 마세요.
+#
+# 무료 플랜은 15분간 요청이 없으면 잠들고, 깨어나는 데 1분쯤 걸립니다.
+# 발표용 링크로 쓸 거라면 starter 플랜을 권합니다 (DEPLOY.md 참고).
+
+services:
+  - type: web
+    name: paddyproof
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      # --- 접속 비밀번호 — 반드시 설정 ---
+      - key: PADDY_WEB_PASSWORD
+        sync: false
+
+      # --- Copernicus 서비스 계정 (Sentinel-1) ---
+      # 개인 로그인은 며칠 만에 만료되므로 서버에서는 쓰면 안 됩니다.
+      - key: OPENEO_AUTH_METHOD
+        value: client_credentials
+      - key: OPENEO_AUTH_PROVIDER_ID
+        value: CDSE
+      - key: OPENEO_AUTH_CLIENT_ID
+        sync: false
+      - key: OPENEO_AUTH_CLIENT_SECRET
+        sync: false
+
+      # --- NASA Earthdata (NISAR 교차 검증) ---
+      # 비워 두면 NISAR 만 꺼지고 Sentinel-1 판정은 정상 동작합니다.
+      - key: EARTHDATA_USERNAME
+        sync: false
+      - key: EARTHDATA_PASSWORD
+        sync: false
+
+      # --- 남용 방지 상한 (공개 데모 기준) ---
+      - key: PADDY_MAX_PLOTS
+        value: "10"
+      - key: PADDY_RATE_PER_HOUR
+        value: "20"
+      - key: PADDY_MAX_CONCURRENT
+        value: "2"

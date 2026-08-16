@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -45,6 +46,111 @@ SH_STATS_URL = "https://sh.dataspace.copernicus.eu/api/v1/statistics"
 
 class PaddyCheckError(RuntimeError):
     """사용자에게 그대로 보여줄 수 있는 오류."""
+
+
+# --------------------------------------------------------------------------
+# 인증 상태 점검
+#
+# 자격증명이 죽었을 때 조용히 멈추지 않고 즉시 이유를 말하게 하는 것이 목적이다.
+# 예전에는 refresh token 이 만료되면 openEO 가 대화형 device flow 로 넘어가
+# 아무도 응답하지 않는 채 5분을 기다렸고, 폴백인 Sentinel Hub 도 같은 죽은
+# 토큰을 다시 써서 결국 두 경로가 모두 실패했다.
+# --------------------------------------------------------------------------
+
+AUTH_OK = "ok"
+AUTH_STALE = "stale"        # 토큰은 있으나 만료됨 — 재로그인 필요
+AUTH_MISSING = "missing"    # 자격증명 자체가 없음
+
+_CC_HINT = (
+    "서버로 운영한다면 개인 계정 대신 CDSE 서비스 계정(M2M)을 쓰세요.\n"
+    "      https://dataspace.copernicus.eu → 계정 → Sentinel Hub → OAuth clients\n"
+    "      발급받은 값을 .env 에 넣으면 만료 없이 자동 갱신됩니다:\n"
+    "        OPENEO_AUTH_METHOD=client_credentials\n"
+    "        OPENEO_AUTH_CLIENT_ID=...\n"
+    "        OPENEO_AUTH_CLIENT_SECRET=...\n"
+    "        OPENEO_AUTH_PROVIDER_ID=CDSE"
+)
+
+
+def has_client_credentials() -> bool:
+    """서비스 계정(M2M) 자격증명이 환경변수에 설정되어 있는가."""
+    return bool(os.environ.get("OPENEO_AUTH_CLIENT_ID")
+                and os.environ.get("OPENEO_AUTH_CLIENT_SECRET"))
+
+
+def _client_credentials_token() -> str:
+    """서비스 계정으로 CDSE 액세스 토큰을 받는다."""
+    import requests  # noqa: PLC0415
+
+    resp = requests.post(
+        f"{OIDC_ISSUER}/protocol/openid-connect/token",
+        data={"grant_type": "client_credentials",
+              "client_id": os.environ["OPENEO_AUTH_CLIENT_ID"],
+              "client_secret": os.environ["OPENEO_AUTH_CLIENT_SECRET"]},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise PaddyCheckError(
+            f"서비스 계정 인증에 실패했습니다({resp.status_code}). "
+            f"OPENEO_AUTH_CLIENT_ID / SECRET 값을 확인하세요."
+        )
+    return resp.json()["access_token"]
+
+
+def _stored_refresh_token() -> str | None:
+    try:
+        from openeo.rest.auth.config import RefreshTokenStore  # noqa: PLC0415
+        return RefreshTokenStore().get_refresh_token(
+            issuer=OIDC_ISSUER, client_id=OIDC_CLIENT_ID)
+    except Exception:
+        return None
+
+
+def check_auth() -> tuple[str, str]:
+    """자격증명이 실제로 쓸 수 있는 상태인지 확인한다. (상태, 사람이 읽을 메시지)
+
+    네트워크 왕복 한 번으로 끝나므로 분석 시작 전에 부담 없이 부를 수 있다.
+    """
+    import requests  # noqa: PLC0415
+
+    if has_client_credentials():
+        try:
+            _client_credentials_token()
+        except PaddyCheckError as exc:
+            return AUTH_STALE, str(exc)
+        except requests.RequestException as exc:
+            return AUTH_STALE, f"인증 서버에 연결할 수 없습니다: {exc}"
+        return AUTH_OK, "서비스 계정(client_credentials)으로 인증되어 있습니다."
+
+    rt = _stored_refresh_token()
+    if not rt:
+        return AUTH_MISSING, (
+            "Copernicus 자격증명이 없습니다.\n"
+            "      로컬에서 쓰려면:  python auth_setup.py\n"
+            f"      {_CC_HINT}")
+
+    try:
+        resp = requests.post(
+            f"{OIDC_ISSUER}/protocol/openid-connect/token",
+            data={"grant_type": "refresh_token", "refresh_token": rt,
+                  "client_id": OIDC_CLIENT_ID},
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        return AUTH_STALE, f"인증 서버에 연결할 수 없습니다: {exc}"
+
+    if resp.status_code == 200:
+        return AUTH_OK, "저장된 Copernicus 로그인으로 인증되어 있습니다."
+
+    detail = ""
+    try:
+        detail = resp.json().get("error_description", "")
+    except ValueError:
+        pass
+    return AUTH_STALE, (
+        f"Copernicus 로그인이 만료되었습니다({resp.status_code} {detail}).\n"
+        "      로컬에서 쓰려면 다시 로그인하세요:  python auth_setup.py\n"
+        f"      {_CC_HINT}")
 
 
 # --------------------------------------------------------------------------
@@ -91,7 +197,12 @@ def _bbox_of(geometry: dict) -> dict:
 # openEO 데이터 취득
 # --------------------------------------------------------------------------
 
-def connect_openeo(verbose: bool = True):
+def connect_openeo(verbose: bool = True, interactive: bool = True):
+    """openEO 백엔드에 접속해 인증한다.
+
+    interactive=False 면 대화형 device flow 로 넘어가지 않는다. 웹 서버처럼
+    아무도 코드를 입력해 줄 수 없는 환경에서 5분씩 멈추는 것을 막기 위해서다.
+    """
     try:
         import openeo  # noqa: PLC0415
     except ImportError as exc:
@@ -101,12 +212,25 @@ def connect_openeo(verbose: bool = True):
 
     if verbose:
         print(f"[1/5] openEO 백엔드 접속: {BACKEND}")
-        print("      * 최초 실행 시 브라우저가 열리거나 터미널에 로그인 URL과")
-        print("        인증 코드가 표시됩니다. Copernicus 계정으로 로그인하세요.")
-        print("        (한 번 인증하면 refresh token 이 저장되어 이후에는 생략됩니다.)")
+        if interactive:
+            print("      * 최초 실행 시 브라우저가 열리거나 터미널에 로그인 URL과")
+            print("        인증 코드가 표시됩니다. Copernicus 계정으로 로그인하세요.")
+            print("        (한 번 인증하면 refresh token 이 저장되어 이후에는 생략됩니다.)")
+
+    if not interactive and not has_client_credentials():
+        # 대화형 폴백이 없으므로, 쓸 수 있는 토큰인지 먼저 확인하고 아니면 즉시 끝낸다.
+        state, msg = check_auth()
+        if state != AUTH_OK:
+            raise PaddyCheckError(msg)
 
     try:
-        conn = _connect_with_fallback(openeo, verbose=verbose).authenticate_oidc()
+        conn = _connect_with_fallback(openeo, verbose=verbose)
+        if has_client_credentials():
+            conn = conn.authenticate_oidc_client_credentials()
+        else:
+            # 이미 토큰 유효성을 확인했으므로 정상 경로에서는 폴링까지 가지 않는다.
+            # 그래도 경합으로 만료되는 경우를 대비해 대기 시간을 짧게 묶는다.
+            conn = conn.authenticate_oidc(max_poll_time=300 if interactive else 20)
     except Exception as exc:  # 네트워크/인증 실패 모두 포괄
         raise PaddyCheckError(
             f"openEO 인증 또는 접속에 실패했습니다: {exc}\n"
@@ -188,15 +312,25 @@ def fetch_vh_timeseries(
 
 
 def _sh_access_token() -> str:
-    """저장된 openEO refresh token 으로 CDSE 액세스 토큰을 발급받는다."""
+    """CDSE 액세스 토큰을 발급받는다.
+
+    서비스 계정이 설정되어 있으면 그것을 쓰고, 없으면 저장된 refresh token 을 쓴다.
+    폴백 경로가 주 경로와 같은 자격증명을 쓰므로, 서비스 계정을 넣어 두면
+    두 경로 모두 만료 없이 동작한다.
+    """
     import requests  # noqa: PLC0415
     from openeo.rest.auth.config import RefreshTokenStore  # noqa: PLC0415
+
+    if has_client_credentials():
+        return _client_credentials_token()
 
     store = RefreshTokenStore()
     rt = store.get_refresh_token(issuer=OIDC_ISSUER, client_id=OIDC_CLIENT_ID)
     if not rt:
         raise PaddyCheckError(
-            "저장된 인증 토큰이 없습니다. 먼저 python auth_setup.py 로 로그인하세요."
+            "Copernicus 자격증명이 없습니다.\n"
+            "      로컬에서 쓰려면:  python auth_setup.py\n"
+            f"      {_CC_HINT}"
         )
     resp = requests.post(
         f"{OIDC_ISSUER}/protocol/openid-connect/token",
@@ -206,8 +340,9 @@ def _sh_access_token() -> str:
     )
     if resp.status_code != 200:
         raise PaddyCheckError(
-            f"토큰 갱신 실패({resp.status_code}). 세션이 만료되었을 수 있습니다.\n"
-            "      python auth_setup.py 로 다시 로그인하세요."
+            f"Copernicus 로그인이 만료되었습니다({resp.status_code}).\n"
+            "      로컬에서 쓰려면 다시 로그인하세요:  python auth_setup.py\n"
+            f"      {_CC_HINT}"
         )
     tokens = resp.json()
     # Keycloak 이 refresh token 을 회전시키면 새것을 저장해 openEO 인증도 유지한다.
@@ -711,6 +846,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--csv", action="store_true", help="관측 시계열을 CSV로도 저장")
     p.add_argument("--source", choices=["auto", "openeo", "sentinelhub"], default="auto",
                    help="데이터 경로 (기본 auto: openEO 실패 시 Sentinel Hub 폴백)")
+    p.add_argument("--non-interactive", action="store_true",
+                   help="대화형 로그인을 시도하지 않는다 (웹 서버 등 무인 환경용). "
+                        "인증이 만료되었으면 기다리지 않고 바로 실패한다.")
     return p.parse_args(argv)
 
 
@@ -755,14 +893,23 @@ def main(argv: list[str] | None = None) -> int:
 
         geometry = buffer_polygon(args.lat, args.lon, args.buffer)
 
+        interactive = not args.non_interactive
+
+        # 두 경로가 같은 자격증명을 쓰므로, 죽은 토큰이면 폴백도 실패한다.
+        # 헛되이 오래 기다리지 않도록 시작 전에 한 번 확인한다.
+        if not interactive:
+            state, msg = check_auth()
+            if state != AUTH_OK:
+                raise PaddyCheckError(msg)
+
         if args.source == "sentinelhub":
             df = fetch_vh_timeseries_sh(geometry, start, end)
         elif args.source == "openeo":
-            conn = connect_openeo()
+            conn = connect_openeo(interactive=interactive)
             df = fetch_vh_timeseries(conn, geometry, start, end)
         else:  # auto: openEO 우선, 백엔드 장애 시 즉시 Sentinel Hub 로 폴백
             try:
-                conn = connect_openeo()
+                conn = connect_openeo(interactive=interactive)
                 # 폴백이 있으므로 재시도 없이 첫 실패에 바로 전환한다.
                 df = fetch_vh_timeseries(conn, geometry, start, end, attempts=1)
             except PaddyCheckError as exc:
