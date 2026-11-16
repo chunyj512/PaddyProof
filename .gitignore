@@ -20,3 +20,7 @@ output/
 
 # 로컬 개발 설정 (절대경로 포함)
 .claude/
+
+# 콘솔이 쓰는 실측 Sentinel-1 표본 (Planetary Computer RTC)
+!seed/*.csv
+!docs/demo.gif

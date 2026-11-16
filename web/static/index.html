@@ -1,165 +1,118 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>논물관리 이행 검증</title>
+<title>PaddyProof · MRV console</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<style>
-  :root{
-    --bg:#f6f7f9; --panel:#fff; --ink:#1b2330; --muted:#6b7480; --line:#e2e6eb;
-    --accent:#1565c0; --water:#1565c0; --drain:#e65100;
-    --ok:#e8f5e9; --ok-ink:#1b5e20; --no:#fff3e0; --no-ink:#e65100;
-    --err:#ffebee; --err-ink:#b71c1c;
-  }
-  @media (prefers-color-scheme:dark){
-    :root{ --bg:#12161c; --panel:#1a1f27; --ink:#e6eaf0; --muted:#9aa4b2;
-      --line:#2b323c; --ok:#14301a; --ok-ink:#7fd68a; --no:#3a2510; --no-ink:#ffb163;
-      --err:#3a1518; --err-ink:#ff9a9a; }
-  }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);
-    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
-  header{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 20px;
-    display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
-  header h1{font-size:17px;margin:0;font-weight:650}
-  header .sub{color:var(--muted);font-size:12.5px}
-  .wrap{max-width:1280px;margin:0 auto;padding:18px 20px 60px}
-  .tabs{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--line)}
-  .tabs button{background:none;border:0;padding:9px 16px;font-size:14px;color:var(--muted);
-    cursor:pointer;border-bottom:2px solid transparent;font-family:inherit}
-  .tabs button.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
-  .grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px}
-  @media(max-width:900px){.grid{grid-template-columns:1fr}}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
-  .card h2{font-size:13px;margin:0 0 12px;font-weight:650;color:var(--muted);
-    text-transform:uppercase;letter-spacing:.4px}
-  #map{height:420px;border-radius:8px;border:1px solid var(--line);z-index:0}
-  .hint{font-size:12.5px;color:var(--muted);margin:8px 0 0}
-  label{display:block;font-size:12.5px;color:var(--muted);margin:10px 0 4px}
-  input,select{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:7px;
-    background:var(--bg);color:var(--ink);font:inherit;font-size:13.5px}
-  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  button.go{width:100%;margin-top:16px;padding:11px;background:var(--accent);color:#fff;
-    border:0;border-radius:8px;font:inherit;font-size:14px;font-weight:600;cursor:pointer}
-  button.go:disabled{opacity:.5;cursor:default}
-  button.ghost{padding:7px 12px;background:none;border:1px solid var(--line);
-    border-radius:7px;color:var(--ink);font:inherit;font-size:12.5px;cursor:pointer}
-  details.adv{margin-top:12px}
-  details.adv summary{font-size:12.5px;color:var(--muted);cursor:pointer;padding:4px 0}
-  .verdict{display:inline-block;padding:5px 14px;border-radius:999px;font-weight:700;font-size:15px}
-  .v-ok{background:var(--ok);color:var(--ok-ink)}
-  .v-no{background:var(--no);color:var(--no-ink)}
-  .v-err{background:var(--err);color:var(--err-ink)}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
-  th{color:var(--muted);font-weight:600;font-size:12px}
-  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
-  .log{background:#0d1117;color:#c9d1d9;border-radius:8px;padding:10px 12px;
-    font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;max-height:180px;
-    overflow:auto;white-space:pre-wrap;word-break:break-all}
-  .bar{height:6px;background:var(--line);border-radius:999px;overflow:hidden;margin:10px 0}
-  .bar>i{display:block;height:100%;background:var(--accent);width:0;transition:width .3s}
-  img.plot{width:100%;border-radius:8px;border:1px solid var(--line);margin-top:12px;background:#fff}
-  .files a{margin-right:14px;font-size:12.5px;color:var(--accent)}
-  .muted{color:var(--muted)}
-  .warn{background:var(--no);color:var(--no-ink);padding:10px 12px;border-radius:8px;
-    font-size:12.5px;margin-top:12px}
-  .err{background:var(--err);color:var(--err-ink);padding:10px 12px;border-radius:8px;
-    font-size:12.5px;margin-top:12px;white-space:pre-wrap}
-  .hidden{display:none}
-  .pill{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--bg);
-    border:1px solid var(--line);color:var(--muted)}
-  .drop{border:2px dashed var(--line);border-radius:10px;padding:26px;text-align:center;
-    color:var(--muted);font-size:13px;cursor:pointer}
-  .drop.over{border-color:var(--accent);color:var(--accent)}
-  .stat{display:flex;gap:20px;margin:12px 0;flex-wrap:wrap}
-  .stat div{font-size:12.5px;color:var(--muted)}
-  .stat b{display:block;font-size:22px;color:var(--ink);font-weight:650;
-    font-variant-numeric:tabular-nums}
-  tr.clickable{cursor:pointer}
-  tr.clickable:hover{background:var(--bg)}
-  dialog{border:1px solid var(--line);border-radius:12px;background:var(--panel);
-    color:var(--ink);max-width:min(920px,92vw);padding:0}
-  dialog::backdrop{background:rgba(0,0,0,.5)}
-  .dlg-head{display:flex;justify-content:space-between;align-items:center;
-    padding:14px 18px;border-bottom:1px solid var(--line)}
-  .dlg-body{padding:18px;max-height:72vh;overflow:auto}
-</style>
+<link rel="stylesheet" href="/static/console.css">
 </head>
 <body>
 
-<header>
-  <h1>논물관리 이행 검증</h1>
-  <span class="sub">Sentinel-1 SAR 기반 담수·낙수 판별</span>
-  <span class="sub" id="authState"></span>
-</header>
-
 <!-- 로그인 -->
-<div class="wrap hidden" id="loginPane">
-  <div class="card" style="max-width:360px;margin:60px auto">
-    <h2>접속 비밀번호</h2>
-    <input type="password" id="pw" placeholder="비밀번호" autofocus>
-    <button class="go" id="loginBtn">들어가기</button>
+<div class="login-wrap hidden" id="loginPane">
+  <div class="card" style="width:min(360px,92vw)">
+    <div class="brand" style="padding:0 0 14px"><svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true"><rect width="34" height="34" rx="9" fill="#1f8a4c"/>
+        <path d="M7 22c2.2-1.6 4.4-1.6 6.6 0s4.4 1.6 6.6 0 4.4-1.6 6.8 0" stroke="#bfe8cf" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <path d="M7 27c2.2-1.6 4.4-1.6 6.6 0s4.4 1.6 6.6 0 4.4-1.6 6.8 0" stroke="#7fcf9f" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <path d="M10 12.5l4.6 4.6L24.5 7.5" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div><b style="color:var(--ink)">PaddyProof</b><span style="color:var(--muted)" data-i18n="brand.sub">MRV console</span></div></div>
+    <h2 data-i18n="la.login">Access password</h2>
+    <input type="password" id="pw" data-i18n-ph="la.pw" placeholder="Password" autofocus>
+    <button class="go" id="loginBtn" data-i18n="la.enter">Enter</button>
     <div class="err hidden" id="loginErr"></div>
   </div>
 </div>
 
-<div class="wrap hidden" id="app">
+<div class="shell hidden" id="app">
+  <aside class="side">
+    <div class="brand"><svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true"><rect width="34" height="34" rx="9" fill="#1f8a4c"/>
+        <path d="M7 22c2.2-1.6 4.4-1.6 6.6 0s4.4 1.6 6.6 0 4.4-1.6 6.8 0" stroke="#bfe8cf" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <path d="M7 27c2.2-1.6 4.4-1.6 6.6 0s4.4 1.6 6.6 0 4.4-1.6 6.8 0" stroke="#7fcf9f" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <path d="M10 12.5l4.6 4.6L24.5 7.5" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div><b>PaddyProof</b><span data-i18n="brand.sub">MRV console</span></div></div>
+    <nav class="nav">
+      <div class="sec" data-i18n="nav.sec.monitor">Monitor</div>
+      <a href="#/overview" data-view="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/></svg><span data-i18n="nav.overview">Portfolio</span></a>
+      <a href="#/anchors" data-view="anchors"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M7 8h10M5 14c0 4 3 6 7 7 4-1 7-3 7-7"/></svg><span data-i18n="nav.anchors">Anchors</span><span class="count alert hidden" id="navAnchors"></span></a>
+      <div class="sec" data-i18n="nav.sec.verify">Verify</div>
+      <a href="#/review" data-view="review"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg><span data-i18n="nav.review">Review queue</span><span class="count" id="navReview"></span></a>
+      <a href="#/reports" data-view="reports"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg><span data-i18n="nav.reports">Reports</span></a>
+      <div class="sec" data-i18n="nav.sec.tools">Tools</div>
+      <a href="#/analysis" data-view="analysis"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6"/></svg><span data-i18n="nav.analysis">Field analysis</span></a>
+    </nav>
+    <div class="side-foot"><b>Team NEXUS</b><br><span data-i18n="side.foot"></span></div>
+  </aside>
+
+  <div class="main">
+    <div class="top">
+      <h1 id="topTitle"></h1>
+      <span class="sp"></span>
+      <span class="asof" id="asof"></span>
+      <span id="authState"></span>
+      <div class="lang"><button id="langBtn" aria-haspopup="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/></svg><span id="langCur">English</span> ▾</button>
+        <div class="lang-menu hidden" id="langMenu"></div></div>
+      <span class="user"><i>PP</i><span data-i18n="top.user">Demo operator</span></span>
+    </div>
+    <div class="wrap">
+      <div id="view"></div>
+
+      <div id="view-analysis" class="hidden">
+        <div class="view-head"><div><h2 data-i18n="nav.analysis">Field analysis</h2>
+          <p data-i18n="la.note"></p></div></div>
   <div id="credWarn"></div>
   <div class="tabs">
-    <button class="on" data-tab="single">단건 분석</button>
-    <button data-tab="batch">일괄 분석</button>
-    <button data-tab="history">지난 결과</button>
+    <button class="on" data-tab="single" data-i18n="la.tab.single">단건 분석</button>
+    <button data-tab="batch" data-i18n="la.tab.batch">일괄 분석</button>
+    <button data-tab="history" data-i18n="la.tab.history">지난 결과</button>
   </div>
 
   <!-- ============ 단건 ============ -->
   <section id="tab-single">
     <div class="grid">
       <div class="card">
-        <h2>필지 위치</h2>
+        <h2 data-i18n="la.location">필지 위치</h2>
         <div id="map"></div>
-        <p class="hint">위성사진 위에서 논을 찾아 클릭하세요. 필지 <b>중앙</b>을 찍어야
-          가장자리 논둑·도로가 섞이지 않습니다.</p>
+        <p class="hint" data-i18n="la.maphint"></p>
       </div>
 
       <div class="card">
-        <h2>분석 조건</h2>
+        <h2 data-i18n="la.conditions">분석 조건</h2>
         <div class="row">
-          <div><label>위도</label><input id="lat" value="35.9820"></div>
-          <div><label>경도</label><input id="lon" value="126.9250"></div>
+          <div><label data-i18n="la.lat">위도</label><input id="lat" value="35.9820"></div>
+          <div><label data-i18n="la.lon">경도</label><input id="lon" value="126.9250"></div>
         </div>
         <div class="row">
-          <div><label>시작일</label><input type="date" id="start"></div>
-          <div><label>종료일</label><input type="date" id="end"></div>
+          <div><label data-i18n="la.start">시작일</label><input type="date" id="start"></div>
+          <div><label data-i18n="la.end">종료일</label><input type="date" id="end"></div>
         </div>
-        <p class="hint" id="periodHint"></p>
+        <p class="hint" id="periodHint" data-i18n="la.periodhint"></p>
 
         <details class="adv">
-          <summary>고급 설정</summary>
+          <summary data-i18n="la.advanced">고급 설정</summary>
           <div class="row">
-            <div><label>담수 임계값 (dB)</label><input id="threshold" value="-20"></div>
-            <div><label>기준 일수</label><input id="minDays" value="14"></div>
+            <div><label data-i18n="la.threshold">담수 임계값 (dB)</label><input id="threshold" value="-20"></div>
+            <div><label data-i18n="la.mindays">기준 일수</label><input id="minDays" value="14"></div>
           </div>
           <div class="row">
-            <div><label>버퍼 반경 (m)</label><input id="buffer" value="40"></div>
-            <div><label>이동평균 (점)</label><input id="smooth" value="3"></div>
+            <div><label data-i18n="la.buffer">버퍼 반경 (m)</label><input id="buffer" value="40"></div>
+            <div><label data-i18n="la.smooth">이동평균 (점)</label><input id="smooth" value="3"></div>
           </div>
-          <label>데이터 경로</label>
+          <label data-i18n="la.source">데이터 경로</label>
           <select id="source">
-            <option value="auto">자동 (openEO → Sentinel Hub 폴백)</option>
-            <option value="openeo">openEO 고정</option>
-            <option value="sentinelhub">Sentinel Hub 고정</option>
+            <option value="auto" data-i18n="la.src.auto">자동</option>
+            <option value="openeo" data-i18n="la.src.openeo">openEO 고정</option>
+            <option value="sentinelhub" data-i18n="la.src.sh">Sentinel Hub 고정</option>
           </select>
         </details>
 
-        <button class="go" id="runBtn">분석 실행</button>
-        <div class="hint" style="text-align:center;margin-top:8px">약 30초 걸립니다</div>
+        <button class="go" id="runBtn" data-i18n="la.run">분석 실행</button>
+        <div class="hint" style="text-align:center;margin-top:8px" data-i18n="la.eta">약 30초 걸립니다</div>
       </div>
     </div>
 
     <div class="card hidden" id="sProgress" style="margin-top:16px">
-      <h2>진행 상황</h2>
+      <h2 data-i18n="la.progress">진행 상황</h2>
       <div class="bar"><i id="sBar"></i></div>
       <div class="log" id="sLog"></div>
     </div>
@@ -171,54 +124,54 @@
   <section id="tab-batch" class="hidden">
     <div class="grid">
       <div class="card">
-        <h2>필지 목록</h2>
+        <h2 data-i18n="la.list">필지 목록</h2>
         <div class="drop" id="drop">
-          CSV 파일을 끌어다 놓거나 클릭해서 선택<br>
-          <span class="muted">형식: 이름,위도,경도 &nbsp;(헤더 있어도 됨)</span>
+          <span data-i18n="la.drop"></span><br>
+          <span class="muted" data-i18n="la.dropfmt"></span>
         </div>
         <input type="file" id="file" accept=".csv,.txt" class="hidden">
         <div style="margin-top:10px">
-          <button class="ghost" id="sampleBtn">예시 CSV 받기</button>
-          <button class="ghost" id="clearBtn">목록 비우기</button>
+          <button class="ghost" id="sampleBtn" data-i18n="la.sample">예시 CSV 받기</button>
+          <button class="ghost" id="clearBtn" data-i18n="la.clear">목록 비우기</button>
         </div>
         <div id="bList" style="margin-top:14px"></div>
       </div>
 
       <div class="card">
-        <h2>공통 조건</h2>
+        <h2 data-i18n="la.common">공통 조건</h2>
         <div class="row">
-          <div><label>시작일</label><input type="date" id="bStart"></div>
-          <div><label>종료일</label><input type="date" id="bEnd"></div>
+          <div><label data-i18n="la.start">시작일</label><input type="date" id="bStart"></div>
+          <div><label data-i18n="la.end">종료일</label><input type="date" id="bEnd"></div>
         </div>
         <details class="adv">
-          <summary>고급 설정</summary>
+          <summary data-i18n="la.advanced">고급 설정</summary>
           <div class="row">
-            <div><label>담수 임계값 (dB)</label><input id="bThreshold" value="-20"></div>
-            <div><label>기준 일수</label><input id="bMinDays" value="14"></div>
+            <div><label data-i18n="la.threshold">담수 임계값 (dB)</label><input id="bThreshold" value="-20"></div>
+            <div><label data-i18n="la.mindays">기준 일수</label><input id="bMinDays" value="14"></div>
           </div>
           <div class="row">
-            <div><label>버퍼 반경 (m)</label><input id="bBuffer" value="40"></div>
-            <div><label>이동평균 (점)</label><input id="bSmooth" value="3"></div>
+            <div><label data-i18n="la.buffer">버퍼 반경 (m)</label><input id="bBuffer" value="40"></div>
+            <div><label data-i18n="la.smooth">이동평균 (점)</label><input id="bSmooth" value="3"></div>
           </div>
         </details>
         <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
           <input type="checkbox" id="bNisar" style="width:auto">
-          <span>NISAR L-band 교차 증거 포함
-            <span class="muted">(첫 조회는 필지당 수 분)</span></span>
+          <span><span data-i18n="la.nisar"></span>
+            <span class="muted" data-i18n="la.nisar.slow"></span></span>
         </label>
-        <button class="go" id="bRunBtn" disabled>일괄 실행</button>
-        <button class="ghost hidden" id="bCancelBtn" style="width:100%;margin-top:8px">중단</button>
+        <button class="go" id="bRunBtn" disabled data-i18n="la.batchrun">일괄 실행</button>
+        <button class="ghost hidden" id="bCancelBtn" style="width:100%;margin-top:8px;justify-content:center" data-i18n="la.stop">중단</button>
         <div class="hint" style="text-align:center;margin-top:8px" id="bEta"></div>
       </div>
     </div>
 
     <div class="card hidden" id="bResult" style="margin-top:16px">
-      <h2>결과</h2>
+      <h2 data-i18n="la.result">결과</h2>
       <div class="bar"><i id="bBar"></i></div>
       <div class="stat" id="bStat"></div>
       <div style="overflow-x:auto"><table id="bTable"></table></div>
       <div style="margin-top:12px">
-        <button class="ghost" id="bDownload">요약 CSV 내려받기</button>
+        <button class="ghost" id="bDownload" data-i18n="la.dlcsv">요약 CSV 내려받기</button>
       </div>
     </div>
   </section>
@@ -226,21 +179,39 @@
   <!-- ============ 이력 ============ -->
   <section id="tab-history" class="hidden">
     <div class="card">
-      <h2>지난 결과</h2>
+      <h2 data-i18n="la.tab.history">지난 결과</h2>
       <div style="overflow-x:auto"><table id="hTable"></table></div>
     </div>
   </section>
-</div>
+      </div><!-- /view-analysis -->
+    </div><!-- /wrap -->
+  </div><!-- /main -->
+</div><!-- /shell -->
+
+<aside class="drawer" id="drawer" aria-label="Plot evidence">
+  <div class="drawer-head"><h3 id="drawerTitle"></h3><span style="flex:1"></span>
+    <button class="ghost" id="drawerClose" data-i18n="la.close">Close</button></div>
+  <div class="drawer-body" id="drawerBody"></div>
+</aside>
+<div class="toast" id="toast" role="status"></div>
 
 <dialog id="dlg">
   <div class="dlg-head">
     <b id="dlgTitle"></b>
-    <button class="ghost" onclick="document.getElementById('dlg').close()">닫기</button>
+    <button class="ghost" onclick="document.getElementById('dlg').close()" data-i18n="la.close">닫기</button>
   </div>
   <div class="dlg-body" id="dlgBody"></div>
 </dialog>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="/static/js/lang/en.js"></script>
+<script src="/static/js/lang/ko.js"></script>
+<script src="/static/js/lang/vi.js"></script>
+<script src="/static/js/lang/id.js"></script>
+<script src="/static/js/lang/th.js"></script>
+<script src="/static/js/i18n.js"></script>
+<script src="/static/js/console.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c =>
@@ -252,9 +223,6 @@ const DEFAULT_START = `${YEAR}-05-01`, DEFAULT_END = `${YEAR}-07-20`;
 for (const [s,e] of [['#start','#end'], ['#bStart','#bEnd']]) {
   $(s).value = DEFAULT_START; $(e).value = DEFAULT_END;
 }
-$('#periodHint').innerHTML =
-  '기본값은 이앙기~7월 중순입니다. 이후 구간은 벼 캐노피 때문에 담수여도 ' +
-  '낙수로 잡히므로 중간물떼기 판정에는 넣지 않는 편이 안전합니다.';
 
 // ---------- 인증 ----------
 async function boot() {
@@ -262,14 +230,28 @@ async function boot() {
   if (r.required && !r.ok) {
     $('#loginPane').classList.remove('hidden');
     $('#authState').textContent = '';
+    I18N.apply();
   } else {
     $('#app').classList.remove('hidden');
-    $('#authState').innerHTML = r.required
-      ? '<span class="pill">로그인됨</span>' : '<span class="pill">로컬 전용</span>';
-    initMap();
+    $('#authState').innerHTML = `<span class="pill" data-i18n="${
+      r.required ? 'top.signedin' : 'top.local'}"></span>`;
+    I18N.mountMenu();
+    PPConsole.start();
     checkCredentials();
   }
 }
+// 분석 화면은 콘솔 메뉴 안에 있다. 지도는 화면이 처음 보일 때 만든다
+// (숨겨진 상태에서 만들면 Leaflet 이 크기를 0으로 잡는다).
+window.showAnalysis = () => {
+  if (!map) initMap();
+  else setTimeout(() => map.invalidateSize(), 50);
+};
+// 콘솔의 필지 증거 화면에서 좌표를 넘겨받아 실시간 분석 화면을 연다.
+window.openAnalysis = (lat, lon) => {
+  $('#lat').value = (+lat).toFixed(5); $('#lon').value = (+lon).toFixed(5);
+  if (map) { setMarker(+lat, +lon); map.setView([+lat, +lon], 15); }
+  location.hash = '#/analysis';
+};
 
 // 위성 자격증명이 죽어 있으면 분석을 눌러 실패를 겪기 전에 미리 알린다.
 async function checkCredentials() {
@@ -309,7 +291,7 @@ function initMap() {
     {maxZoom:19, attribution:'Esri World Imagery'}).addTo(map);
   const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     {maxZoom:19, attribution:'© OpenStreetMap'});
-  L.control.layers({'위성사진':sat, '일반지도':osm}).addTo(map);
+  L.control.layers({'Imagery':sat, 'Map':osm}).addTo(map);
   setMarker(lat, lon);
   map.on('click', e => {
     $('#lat').value = e.latlng.lat.toFixed(5);

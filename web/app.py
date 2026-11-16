@@ -30,6 +30,7 @@ from typing import Any
 
 from fastapi import Cookie, FastAPI, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "paddy_check.py"
@@ -619,6 +620,18 @@ def get_file(name: str, session: str | None = Cookie(default=None)):
     return FileResponse(path, media_type=media)
 
 
+# --------------------------------------------------------------------------
+# MRV 콘솔 (포트폴리오·앵커·검토·리포트). 분석 로직과는 독립이다.
+# --------------------------------------------------------------------------
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from console_api import make_router  # noqa: E402
+
+app.include_router(make_router(require_auth))
+# 정적 자원(CSS/JS)에는 데이터가 없으므로 인증 없이 내준다.
+app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+
+
 @app.get("/healthz")
 def healthz():
     """배포 플랫폼의 상태 점검용. 인증을 요구하지 않는다.
@@ -657,6 +670,10 @@ def main() -> None:
               "PADDY_WEB_PASSWORD 환경변수를 설정하세요.\n")
     print(f"  논물관리 이행 검증  →  http://{args.host}:{args.port}")
     print(f"  인증: {'비밀번호 필요' if PASSWORD else '없음 (로컬 전용)'}\n")
+
+    # 콘솔 데이터(해시체인 약 6만 건)를 미리 만들어 첫 화면을 앞당긴다.
+    from console_data import get_console
+    threading.Thread(target=get_console, daemon=True).start()
 
     import uvicorn
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
