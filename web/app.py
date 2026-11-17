@@ -34,9 +34,15 @@ from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "paddy_check.py"
+WORKER = Path(__file__).resolve().parent / "worker.py"
 OUTDIR = ROOT / "output"
 STATIC = Path(__file__).resolve().parent / "static"
 PYTHON = sys.executable
+
+# 요청마다 sys.path.insert 를 하면 목록이 끝없이 길어진다. 시작할 때 한 번만.
+for _p in (str(ROOT), str(Path(__file__).resolve().parent)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 PASSWORD = os.environ.get("PASSWORD") or os.environ.get("PADDY_WEB_PASSWORD")
 _sessions: set[str] = set()
@@ -45,6 +51,16 @@ _sessions: set[str] = set()
 MAX_PLOTS = int(os.environ.get("PADDY_MAX_PLOTS", "300"))
 RATE_PER_HOUR = int(os.environ.get("PADDY_RATE_PER_HOUR", "0"))  # 0 = 제한 없음
 MAX_CONCURRENT = int(os.environ.get("PADDY_MAX_CONCURRENT", "2"))
+
+# 서버 전체에서 동시에 도는 무거운 서브프로세스(위성 조회·NISAR 읽기) 수.
+# IP 당 상한(MAX_CONCURRENT)만으로는 여러 사용자가 겹칠 때 메모리를 막지 못한다.
+# 512 MB 인스턴스에서는 1 이 안전하다. 나머지 작업은 대기열에서 차례를 기다린다.
+MAX_RUNNING = max(1, int(os.environ.get("PADDY_MAX_RUNNING", "1")))
+_heavy = threading.BoundedSemaphore(MAX_RUNNING)
+
+# 끝난 작업은 이 시간이 지나면 메모리에서 지운다 (결과 파일은 output/ 에 남는다).
+JOB_TTL = float(os.environ.get("PADDY_JOB_TTL", "1800"))
+MAX_JOBS = 200
 
 
 class RateLimiter:
@@ -87,6 +103,16 @@ class RateLimiter:
                 self._running.pop(ip, None)
             else:
                 self._running[ip] = n
+
+    def prune(self) -> None:
+        """한 시간 넘게 조용한 IP 의 기록을 지운다. 안 지우면 방문 IP 수만큼 쌓인다."""
+        import time as _t
+
+        now = _t.time()
+        with self._lock:
+            for ip in [ip for ip, hits in self._hits.items()
+                       if not hits or now - hits[-1] >= 3600]:
+                del self._hits[ip]
 
 
 _limiter = RateLimiter()
@@ -137,6 +163,8 @@ class Job:
     events: list[dict] = field(default_factory=list)
     done: bool = False
     cancelled: bool = False
+    finished_at: float | None = None
+    proc: subprocess.Popen | None = None   # 취소 시 바로 종료하기 위해 보관
     _cv: threading.Condition = field(default_factory=threading.Condition)
 
     def emit(self, kind: str, **payload) -> None:
@@ -145,12 +173,72 @@ class Job:
             self._cv.notify_all()
 
     def finish(self) -> None:
+        import time as _t
+
         with self._cv:
             self.done = True
+            self.finished_at = _t.time()
             self._cv.notify_all()
 
 
 _jobs: dict[str, Job] = {}
+_jobs_lock = threading.Lock()
+
+
+def prune_jobs() -> None:
+    """끝난 지 JOB_TTL 이 지난 작업을 지운다.
+
+    예전에는 작업과 그 로그 이벤트 전부가 프로세스가 살아 있는 동안 남아 있어
+    분석 횟수에 비례해 메모리가 늘었다.
+    """
+    import time as _t
+
+    now = _t.time()
+    with _jobs_lock:
+        for jid in [j.id for j in _jobs.values()
+                    if j.done and j.finished_at and now - j.finished_at > JOB_TTL]:
+            del _jobs[jid]
+        # 그래도 너무 많으면 끝난 것부터 오래된 순으로 지운다.
+        finished = sorted((j for j in _jobs.values() if j.done),
+                          key=lambda j: j.finished_at or 0)
+        for j in finished[:max(0, len(_jobs) - MAX_JOBS)]:
+            del _jobs[j.id]
+    _limiter.prune()
+
+
+class WorkerError(RuntimeError):
+    pass
+
+
+def run_worker(mode: str, timeout: float = 900, job: Job | None = None, **args) -> Any:
+    """web/worker.py 를 서브프로세스로 실행하고 결과 JSON 을 돌려준다.
+
+    pandas·matplotlib·earthaccess 를 서버 프로세스에 올리지 않기 위한 것이다.
+    """
+    from worker import RESULT_PREFIX
+
+    proc = subprocess.Popen(
+        [PYTHON, str(WORKER), json.dumps({"mode": mode, **args}, ensure_ascii=False)],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, cwd=str(ROOT),
+        env={**os.environ, "PYTHONUNBUFFERED": "1"})
+    if job is not None:
+        job.proc = proc
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise WorkerError(f"{timeout:.0f}초 안에 끝나지 않았습니다.")
+    finally:
+        if job is not None:
+            job.proc = None
+    line = next((l for l in reversed(out.splitlines()) if l.startswith(RESULT_PREFIX)), None)
+    if line is None:
+        raise WorkerError(f"작업 프로세스가 비정상 종료했습니다 (코드 {proc.returncode}).")
+    res = json.loads(line[len(RESULT_PREFIX):])
+    if not res["ok"]:
+        raise WorkerError(res["error"])
+    return res["value"]
 
 
 # --------------------------------------------------------------------------
@@ -194,6 +282,7 @@ def run_one(job: Job, idx: int, plot: Plot) -> None:
         job.emit("plot", index=idx, plot=plot.to_dict())
         return
 
+    job.proc = proc
     tail: list[str] = []
     for line in proc.stdout:  # type: ignore[union-attr]
         line = line.rstrip()
@@ -218,9 +307,12 @@ def run_one(job: Job, idx: int, plot: Plot) -> None:
         job.emit("log", index=idx, line=line)
 
     proc.wait()
-    if proc.returncode == 0 and plot.verdict:
+    job.proc = None
+    if job.cancelled and proc.returncode != 0:
+        plot.status = "취소"
+    elif proc.returncode == 0 and plot.verdict:
         plot.status = "완료"
-        if p.get("nisar") and plot.csv:
+        if p.get("nisar") and plot.csv and not job.cancelled:
             _attach_cross_check(job, idx, plot, p)
     else:
         plot.status = "실패"
@@ -235,43 +327,21 @@ def _attach_cross_check(job: Job, idx: int, plot: Plot, p: dict) -> None:
     통합 그래프는 NISAR 를 못 얻어도 그린다. 그래야 결과 화면에 늘 같은 그래프가
     놓이고, '교차 검증을 아직 안 한 것' 과 '할 수 없는 것' 이 구분된다.
     """
-    sys.path.insert(0, str(ROOT))
     job.emit("log", index=idx, line="      NISAR 교차 증거 조회 중...")
-
-    rows = None
+    # 실제 작업은 web/worker.py 의 cross() 가 별도 프로세스에서 한다.
     try:
-        from nisar_evidence import cross_check
-        res = cross_check(plot.lat, plot.lon, OUTDIR / plot.csv,
-                          buffer_m=float(p["buffer"]), verbose=False)
-        plot.nisar = res["verdict"]
-        plot.nisar_reason = res.get("reason")
-        rows = res.get("rows") or []
-        for r in rows:
-            r["date"] = str(r["date"])[:10]
-        plot.nisar_detail = {
-            k: res[k] for k in
-            ("reason", "hh_drained", "hh_ponded", "hh_diff", "n_ponded",
-             "n_drained", "n_nisar", "timeline")
-            if k in res
-        }
-        plot.nisar_detail["rows"] = rows
+        res = run_worker("cross", job=job, csv=plot.csv, lat=plot.lat, lon=plot.lon,
+                         buffer=p["buffer"], threshold=p["threshold"],
+                         min_days=p["min_days"])
     except Exception as exc:
-        plot.nisar = "error"
-        plot.nisar_reason = str(exc)[:200]
+        plot.nisar, plot.nisar_reason = "error", str(exc)[:200]
         job.emit("log", index=idx, line=f"      NISAR 실패: {str(exc)[:60]}")
-
-    try:
-        from nisar_compare import render_combined_png
-        name = f"combined_{Path(plot.csv).stem}.png"
-        out = render_combined_png(
-            plot.lat, plot.lon, OUTDIR / plot.csv, OUTDIR / name,
-            threshold=float(p["threshold"]), min_days=int(p["min_days"]),
-            nisar_rows=rows, buffer_m=float(p["buffer"]), verbose=False,
-        )
-        plot.combined_png = out["png"]
-        job.emit("log", index=idx, line=f"      저장: {out['png']}")
-    except Exception as exc:
-        job.emit("log", index=idx, line=f"      통합 그래프 실패: {str(exc)[:80]}")
+        return
+    for k in ("nisar", "nisar_reason", "nisar_detail", "combined_png"):
+        if k in res:
+            setattr(plot, k, res[k])
+    for line in res.get("logs", []):
+        job.emit("log", index=idx, line=line)
 
 
 def run_job(job: Job) -> None:
@@ -280,11 +350,25 @@ def run_job(job: Job) -> None:
             plot.status = "취소"
             job.emit("plot", index=idx, plot=plot.to_dict())
             continue
+        # 서버 전체 동시 실행 상한. 자리가 없으면 대기열에서 기다린다.
+        if not _heavy.acquire(blocking=False):
+            job.emit("log", index=idx, line="      다른 분석이 끝나기를 기다리는 중...")
+            acquired = False
+            while not job.cancelled:
+                if _heavy.acquire(timeout=1.0):
+                    acquired = True
+                    break
+            if not acquired:
+                plot.status = "취소"
+                job.emit("plot", index=idx, plot=plot.to_dict())
+                continue
         try:
             run_one(job, idx, plot)
         except Exception as exc:  # 한 필지 실패가 전체를 멈추지 않도록
             plot.status, plot.error = "실패", str(exc)
             job.emit("plot", index=idx, plot=plot.to_dict())
+        finally:
+            _heavy.release()
     job.emit("done")
     job.finish()
 
@@ -294,26 +378,13 @@ def run_job(job: Job) -> None:
 # --------------------------------------------------------------------------
 
 def sensitivity(csv_name: str, min_days: int, base: float) -> list[dict]:
-    """임계값을 ±1 dB 흔들어 판정이 유지되는지 확인한다."""
-    sys.path.insert(0, str(ROOT))
-    import pandas as pd
-    from paddy_check import classify, find_drain_periods
+    """임계값을 ±1 dB 흔들어 판정이 유지되는지 확인한다 (worker.sensitivity).
 
-    df = pd.read_csv(OUTDIR / csv_name, encoding="utf-8-sig")
-    df["date"] = pd.to_datetime(df["date"])
-
-    out = []
-    for th in sorted({round(base - 1, 2), round(base - 0.5, 2), base,
-                      round(base + 0.5, 2), round(base + 1, 2)}):
-        periods = find_drain_periods(classify(df, th))
-        longest = max((p.days for p in periods), default=0)
-        out.append({
-            "threshold": th,
-            "longest": longest,
-            "verdict": "이행" if longest >= min_days else "미이행",
-            "is_base": th == base,
-        })
-    return out
+    pandas 를 서버에 올리지 않으려고 별도 프로세스에서 계산한다. 가벼워서
+    동시 실행 상한(_heavy)은 걸지 않는다 — 긴 분석 뒤에 줄 서지 않게.
+    """
+    return run_worker("sensitivity", timeout=120, csv=csv_name,
+                      min_days=min_days, threshold=base)["rows"]
 
 
 # --------------------------------------------------------------------------
@@ -349,7 +420,6 @@ def credentials(session: str | None = Cookie(default=None)):
     if _cred_cache["value"] and now - _cred_cache["at"] < CRED_TTL:
         return _cred_cache["value"]
 
-    sys.path.insert(0, str(ROOT))
     try:
         from paddy_check import AUTH_OK, check_auth
         state, message = check_auth()
@@ -429,8 +499,10 @@ async def analyze(payload: dict, request: Request,
         "nisar": bool(payload.get("nisar", True)),
     }
 
+    prune_jobs()
     job = Job(id=uuid.uuid4().hex[:12], plots=plots, params=params)
-    _jobs[job.id] = job
+    with _jobs_lock:
+        _jobs[job.id] = job
 
     _limiter.enter(ip)
 
@@ -487,6 +559,9 @@ def cancel(job_id: str, session: str | None = Cookie(default=None)):
     require_auth(session)
     if job := _jobs.get(job_id):
         job.cancelled = True
+        # 예전에는 다음 필지만 건너뛰고 실행 중인 서브프로세스는 끝까지 돌았다.
+        if (proc := job.proc) is not None and proc.poll() is None:
+            proc.terminate()
         return {"ok": True}
     raise HTTPException(404, "작업을 찾을 수 없습니다.")
 
@@ -512,28 +587,15 @@ def api_nisar(csv: str, lat: float, lon: float, buffer: float = 40.0,
     name = Path(csv).name
     if not (OUTDIR / name).is_file():
         raise HTTPException(404, "S1 결과 파일을 찾을 수 없습니다.")
-    sys.path.insert(0, str(ROOT))
+    # 원격 HDF5 를 읽어 메모리를 많이 쓰므로 분석 작업과 같은 상한을 따른다.
+    if not _heavy.acquire(timeout=30):
+        raise HTTPException(503, "다른 분석이 진행 중입니다. 잠시 후 다시 시도하세요.")
     try:
-        from nisar_evidence import cross_check
-    except ImportError as exc:
-        raise HTTPException(503, f"NISAR 모듈을 불러올 수 없습니다: {exc}")
-    try:
-        res = cross_check(lat, lon, OUTDIR / name, buffer_m=buffer, verbose=False)
+        return run_worker("nisar", csv=name, lat=lat, lon=lon, buffer=buffer)
     except Exception as exc:
         raise HTTPException(500, f"NISAR 교차 검증 실패: {exc}")
-    for r in res.get("rows", []):
-        r["date"] = str(r["date"])[:10]
-
-    # 관측이 있으면 S1+NISAR 통합 비교 그래프도 만들어 준다 (캐시라 수 초).
-    if res.get("rows"):
-        try:
-            from nisar_compare import render_compare_png
-            png_name = f"nisarcmp_{Path(name).stem}.png"
-            render_compare_png(lat, lon, OUTDIR / name, OUTDIR / png_name)
-            res["png"] = png_name
-        except Exception:
-            pass  # 그래프는 부가 정보 — 실패해도 교차 증거는 그대로 반환한다
-    return res
+    finally:
+        _heavy.release()
 
 
 @app.post("/api/parse-csv")
@@ -624,7 +686,6 @@ def get_file(name: str, session: str | None = Cookie(default=None)):
 # MRV 콘솔 (포트폴리오·앵커·검토·리포트). 분석 로직과는 독립이다.
 # --------------------------------------------------------------------------
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 from console_api import make_router  # noqa: E402
 
 app.include_router(make_router(require_auth))

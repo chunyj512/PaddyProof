@@ -46,3 +46,6 @@ services:
         value: "20"
       - key: PADDY_MAX_CONCURRENT
         value: "2"
+      # 서버 전체 동시 분석 수. 512 MB(무료)에서는 1, Standard(2 GB) 이상이면 2~3
+      - key: PADDY_MAX_RUNNING
+        value: "1"
